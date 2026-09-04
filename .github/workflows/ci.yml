@@ -1,0 +1,30 @@
+name: Contract and Chromium tests
+on: [push, pull_request]
+permissions:
+  contents: read
+jobs:
+  tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - run: pip install uv==0.12.9
+      - run: uv sync --frozen --extra dev --extra browser
+      - run: uv run ruff check src tests scripts
+      - run: uv run pytest -q -m 'not browser'
+      # GitHub Ubuntu images include Google Chrome; no --no-sandbox workaround.
+      - run: CB_TEST_CHROMIUM=/usr/bin/google-chrome uv run pytest -q -m browser
+  multiarch-build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          target: browser
+          platforms: linux/amd64,linux/arm64
+          push: false

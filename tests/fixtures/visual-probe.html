@@ -1,0 +1,11 @@
+<!doctype html><html><meta charset="utf-8"><title>Visual transport probe</title>
+<canvas width="900" height="600"></canvas>
+<script>
+// The generated number is painted only; not placed in DOM text or accessibility labels.
+const canvas=document.querySelector('canvas'),ctx=canvas.getContext('2d');
+ctx.fillStyle='#fff';ctx.fillRect(0,0,900,600);
+ctx.fillStyle='#1865db';ctx.beginPath();ctx.moveTo(90,250);ctx.lineTo(230,30);ctx.lineTo(370,250);ctx.fill();
+ctx.fillStyle='#e83142';ctx.beginPath();ctx.arc(650,150,100,0,Math.PI*2);ctx.fill();
+ctx.fillStyle='#111';ctx.font='bold 80px sans-serif';
+ctx.fillText(String(crypto.getRandomValues(new Uint32Array(1))[0]%9000+1000),300,460);
+</script></html>

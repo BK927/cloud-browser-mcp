@@ -1,0 +1,13 @@
+<!doctype html><html lang="en"><meta charset="utf-8"><title>Controlled browser contract fixture</title>
+<style>body{font-family:sans-serif}#bottom{margin-top:1500px}canvas{border:1px solid black}</style>
+<h1>Browser acceptance fixture</h1>
+<button id="accordion" aria-expanded="true" onclick="this.setAttribute('aria-expanded',this.getAttribute('aria-expanded')==='true'?'false':'true')">Personal Information</button>
+<label>Search <input id="query"></label>
+<label>Order <select id="order"><option value="old">Oldest</option><option value="recent">Recent</option></select></label>
+<label>Consent <input id="check" type="checkbox"></label>
+<button id="submit" onclick="document.querySelector('#count').textContent=++window.submissions">Submit test</button><span id="count">0</span>
+<button id="popup" onclick="window.open('/browser.html','_blank')">Open new tab</button>
+<button id="replace" onclick="document.querySelector('#accordion').outerHTML=document.querySelector('#accordion').outerHTML">Replace accordion DOM</button>
+<p id="bottom">Bottom of a long page</p>
+<script>window.submissions=0;</script>
+</html>

@@ -1,0 +1,104 @@
+# Personal Cloud Browser MCP
+
+웹 ChatGPT가 **내 서버에서 실행되는 별도 Chromium**을 읽고 조작하는 단일 사용자용
+MCP입니다. 서버에서 LLM을 실행하지 않으며 모델 API 키가 필요하지 않습니다.
+
+**현재: 검증 중인 0.1 프로토타입.** 로컬 Chromium·MCP·보안 회귀 테스트가 있습니다.
+실제 웹 ChatGPT 이미지 인식, Debian arm64/amd64 Docker 실행, Raspberry Pi 4B 2GB
+실측은 아직 완료하지 않았습니다. 운영 투입 전 [통합 검증](docs/VALIDATION.md)을
+완료해야 합니다. 공개 SaaS·다중 사용자·앱 디렉터리 제출은 범위 밖입니다.
+
+## 라이선스
+
+직접 작성한 코드·문서는 [MIT](LICENSE)입니다. 기본 엔진 DrissionPage에는 **별도
+개인 학습·합법적 비영리 사용 조건**이 있습니다. MIT가 의존성까지 재라이선스하지
+않습니다. [필수 의존성 고지](THIRD_PARTY_NOTICES.md)를 먼저 읽으세요.
+
+## 구성
+
+```text
+웹 ChatGPT ─ HTTPS / Funnel :443 ─ MCP + OAuth :8000
+                                           │
+사용자 ─ tailnet / Serve :8443 ─ 비공개 콘솔 :8001
+                                           │
+                 순차 작업 프로세스 ─ DrissionPage ─ Chromium
+                                                      │
+                                         공개 목적지만 허용하는 프록시
+```
+
+AI 스크린샷은 MCP의 실제 `image` content로 전달됩니다. 비공개 콘솔은 로그인·일회
+승인·같은 Chromium의 수동 제어용입니다. 원본 CDP·VNC 포트는 공개하지 않습니다.
+
+## 시작하기
+
+배포 목표: Debian 13 arm64·amd64. Windows/macOS: Linux 컨테이너를 실행하는 Docker
+Desktop 경로. 현재 Windows의 별도 Chromium에서 실행을 확인했으며 이를 Linux/Pi
+지원 인증으로 간주하지 않습니다.
+
+1. [설치 가이드](docs/DEPLOYMENT.md)에 따라 Docker·Tailscale·`.env`를 준비합니다.
+2. 관리자 암호를 Argon2id 해시로 설정하고 ChatGPT의 **정확한 OAuth callback**을
+   등록합니다. 공개 client ID + PKCE 방식입니다.
+3. 엔진 라이선스 확인 후 `docker compose up --build -d`로 시작합니다.
+4. Funnel과 Serve를 서로 다른 HTTPS 포트에 연결합니다.
+5. 웹 ChatGPT 개발자 모드에서 `/mcp`를 연결하고 최초 이미지 전달을 검증합니다.
+
+서버 배포 가능 여부와 ChatGPT 계정에서 사용자 지정 MCP 기능을 사용할 수 있는지는
+별개입니다. 이 저장소가 사용자를 대신해 공개 접속·ChatGPT 설정을 변경하지는 않습니다.
+
+## 도구
+
+| 도구 | 내용 |
+|---|---|
+| `browser_open` | 새 세션·탭, 기존 탭 재사용, 선택적 URL 이동 |
+| `browser_list_tabs` | 탭 조회 |
+| `browser_navigate` | URL·기록 이동, GET 문서 새로고침 |
+| `browser_observe` | 접근성/렌더링 DOM, 노드, 이미지, 페이지네이션 |
+| `browser_act` | 클릭·입력·키·선택·체크·스크롤·좌표 행동 |
+| `browser_auth_request` | 보호된 사용자 로그인 시작 |
+| `browser_handoff` | 수동 제어 시작, 즉시 반환 |
+| `browser_close` | 탭·세션 종료 |
+| `browser_status` | 자원·탭·제어·인증 진행 조회 |
+| `browser_configure` | 화면·이미지 품질·출력량·대기 시간 조절 |
+
+초기 화면은 1024×768, JPEG 품질 75입니다. 탭을 3개로 고정하지 않습니다. 호스트와
+cgroup의 메모리 여유를 검사해 `RESOURCE_PRESSURE`를 반환하면 AI가 탭 재사용·정리·
+캡처 축소를 선택합니다. 운영자 안전 예산은 AI가 바꾸지 못합니다.
+
+## 안전 기본값
+
+- 클릭·입력·선택·체크·키 입력은 **매번 비공개 콘솔 승인**을 요구합니다.
+- 토큰 echo만으로는 승인되지 않습니다. 실제 사용자 승인·동일 행동·대상·revision을
+  확인하고 한 번 소비한 뒤 실행합니다.
+- 로그인 중 세션 전체의 DOM·이미지·탭 제목 수집을 중단합니다. 제어 시간이 만료되어도
+  자동화를 자동 재개하지 않습니다.
+- 로그인 완료는 인증 성공 증거가 아닙니다. 사이트별 검증기가 없는 이 버전은
+  `authenticated: null`, `verification: "unverified"`를 반환합니다.
+- 알려진 민감 입력/iframe 화면은 이미지를 거부합니다. 임의 비밀값을 완벽하게
+  탐지한다는 보장은 없습니다.
+- `RESULT_UNCERTAIN`을 재시도하지 않습니다. 수동 확인 후 다음 행동을 허용합니다.
+- 사용자 로컬 Chrome 프로필·쿠키·방문 기록을 가져오지 않습니다.
+
+[보안 경계](SECURITY.md)와 [외부 계약·제한](docs/CONTRACT.md)을 확인하세요.
+
+## 개발과 테스트
+
+Python 3.12 이상과 uv를 사용합니다.
+
+```sh
+uv sync --extra browser --extra dev --frozen
+uv run pytest -q -m 'not browser'
+uv run ruff check src tests scripts
+CB_TEST_CHROMIUM=/usr/bin/chromium uv run pytest -q -m browser
+```
+
+Windows PowerShell:
+
+```powershell
+$env:CB_TEST_CHROMIUM='C:\Program Files\Google\Chrome\Application\chrome.exe'
+uv run pytest -q
+```
+
+실제 테스트는 새 임시 Chromium 프로필만 사용합니다. 테스트 내부망 예외는 특정
+fixture에 한정한 코드 패치이며 운영에서 차단을 해제하는 옵션이 아닙니다.
+
+WebMCP·파일 업로드 자동화·iframe 자동 조작·passkey/보안 키 전달은 후속 범위입니다.

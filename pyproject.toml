@@ -1,0 +1,46 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "personal-cloud-browser-mcp"
+version = "0.1.0"
+description = "Single-user, self-hosted Chromium browser for remote MCP clients"
+requires-python = ">=3.12"
+license = "MIT"
+license-files = ["LICENSE", "THIRD_PARTY_NOTICES.md"]
+readme = "README.md"
+dependencies = [
+  "mcp>=2.0,<3", "fastapi>=0.115,<1", "uvicorn>=0.34,<1",
+  "pydantic-settings>=2.8,<3", "argon2-cffi>=25,<26",
+  "python-multipart>=0.0.22,<1", "psutil>=7,<8", "pillow>=11,<13",
+  "websockets>=15,<17", "httpx>=0.28,<1",
+]
+
+[project.optional-dependencies]
+browser = ["DrissionPage==4.1.1.4"]
+dev = ["pytest>=8,<10", "pytest-asyncio>=1,<2", "ruff>=0.11,<1", "pyyaml>=6,<7"]
+
+[project.scripts]
+cloud-browser = "cloud_browser.cli:main"
+
+[project.urls]
+Repository = "https://github.com/BK927/cloud-browser-mcp"
+Issues = "https://github.com/BK927/cloud-browser-mcp/issues"
+Documentation = "https://github.com/BK927/cloud-browser-mcp#readme"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/cloud_browser"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+markers = ["browser: requires local Chromium and DrissionPage"]
+
+[tool.ruff]
+target-version = "py312"
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP"]
+ignore = ["E501"]
