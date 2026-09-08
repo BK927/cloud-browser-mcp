@@ -21,7 +21,7 @@ ENTRYPOINT ["python", "-m", "cloud_browser.ingress"]
 # CI-only nested netns fixture. It is never the default or a deployment target.
 FROM base AS network-manager-test
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    network-manager dbus iproute2 iptables util-linux \
+    network-manager dbus iproute2 iptables util-linux procps \
     && rm -rf /var/lib/apt/lists/* \
     && useradd --system --no-create-home cb-browser
 ENV CB_NETWORK_TEST=1

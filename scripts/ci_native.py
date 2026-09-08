@@ -212,6 +212,10 @@ os.execv("/usr/bin/google-chrome", ["/usr/bin/google-chrome", *sys.argv[1:]])
             "cloud-browser.service",
             "-u",
             "cloud-browser-network.service",
+            "-u",
+            "cloud-browser-egress.service",
+            "-u",
+            "cloud-browser-ingress.service",
             check=False,
         )
         chrome_log = Path("/run/cloud-browser/chromium-ci.log")

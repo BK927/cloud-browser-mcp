@@ -127,4 +127,10 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except subprocess.CalledProcessError as error:
+        # This network-none fixture has only generated test state and commands;
+        # retain bounded stderr so missing utilities aren't mistaken for policy.
+        print((error.stderr or "")[-2000:])
+        raise

@@ -42,9 +42,10 @@ jobs:
       # Debian 13 installation and Pi performance remain separate target gates.
       - run: sudo --preserve-env=GITHUB_ACTIONS,RUNNER_OS .venv/bin/python scripts/ci_native.py
       # Actual NetworkManager, but only inside its own network-none container.
-      # Capabilities below permit nested test netns; no host mounts or host NM.
+      # Capabilities/proc access permit nested test netns and their IPv6 sysctls;
+      # no host mounts or host NM. Never use these flags for browser deployment.
       - run: docker build --target network-manager-test -t cb-network-ci .
-      - run: docker run --rm --network none --memory 512m --pids-limit 128 --cap-add NET_ADMIN --cap-add SYS_ADMIN --security-opt seccomp=unconfined --security-opt apparmor=unconfined cb-network-ci
+      - run: docker run --rm --network none --memory 512m --pids-limit 128 --cap-add NET_ADMIN --cap-add SYS_ADMIN --security-opt seccomp=unconfined --security-opt apparmor=unconfined --security-opt systempaths=unconfined cb-network-ci
   docker-runtime:
     runs-on: ubuntu-latest
     timeout-minutes: 25
