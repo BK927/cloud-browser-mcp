@@ -66,6 +66,18 @@ browser 그룹으로만 공유합니다. API의 0007 umask는 이 두 UID의 프
 TCP/IP 목적지에 연결할 수 없습니다. IPv6도 차단합니다. CDP/VNC는 원본 포트를 공개하지 않습니다.
 proxy는 매 연결 DNS/IP 검증으로 내부망·loopback·인증정보 URL 접근을 거부합니다.
 
+NetworkManager가 실행 중이면, 설치한 network unit은 **이번 시작에서 생성한 전용 veth
+두 개만** `nmcli device set … managed no`로 넘겨받은 뒤 주소를 설정합니다. 장치 등록을
+제한 시간 동안 기다리고 unmanaged 상태를 확인합니다. NM 전체 reload/restart, 연결 프로필
+수정, 영구 unmanaged 설정 또는 Ethernet/Wi-Fi·Docker·Tailscale 변경은 하지 않습니다.
+이는 Debian이 제공하는 [장치별 런타임 설정](https://manpages.debian.org/trixie/network-manager/nmcli.1.en.html#DEVICE_MANAGEMENT_COMMANDS)을 사용합니다.
+
+network 완료, egress `ExecStartPre`, API 시작에서 관련 veth의 종류·UP 상태·정확한 IPv4/30을
+검사합니다. `NATIVE_MANAGER_UNVERIFIED`, `NATIVE_LINK_CHANGED`, `NATIVE_LINK_NOT_READY`는
+검증 실패이며 우회 실행하지 않습니다. NM이 없으면 새로 설치/시작하지 않습니다. 실행 중에
+관리자가 NM을 재설정하거나 장치 소유권을 바꾸는 경우 자동 복구를 보장하지 않으므로 기존
+작업을 안전하게 종료하고 전용 network unit을 다시 시작해 확인하세요.
+
 운영 API는 root 소유 attestation·실제 namespace·실제 cgroup `memory.max`·proxy 경로를
 확인하지 못하면 리스너를 열지 않습니다. Docker와 같은 데이터 inode를 여는 다른 인스턴스는
 OS 잠금에서 거절됩니다. 구버전 Docker는 이 잠금이 없으므로 구버전 데이터 볼륨을 공유하지 마세요.
@@ -96,6 +108,9 @@ sudo systemctl status cloud-browser.service cloud-browser-egress.service cloud-b
 namespace 설정 중 실패하여 attestation이 없거나 규칙이 바뀌면 자동 정리도 거절합니다.
 관리자가 `ip netns`, 정확한 cb-* interface와 `CB_NATIVE_*` 체인을 점검해야 합니다.
 호스트 방화벽 전체 flush, Docker 네트워크 제거, sandbox 해제로 복구하지 마세요.
+주소가 사라졌더라도 보호된 attestation·namespace identity·방화벽이 그대로이면 전용
+`network-down`은 허용합니다. 실행 준비 상태와 정리 소유권 검사를 분리한 것이며,
+미소유/변조된 네트워크를 제거할 수 있게 하는 예외는 아닙니다.
 
 ## 삭제
 
@@ -115,3 +130,7 @@ Linux CI는 `umask 077`의 신규 설치·동일 release 업데이트와 자격�
 종료 후 회수를 검사합니다. Ubuntu CI의 Google Chrome 검증은 Debian 설치나 Pi 실측을
 대체하지 않습니다. [동일 예산 비교 절차](PERFORMANCE_COMPARISON.md)를 따르고 절감이
 없거나 실패한 경우도 그대로 기록하세요.
+
+실제 NM 회귀는 인터넷과 호스트 mount가 없는 별도 `network-manager-test` CI 컨테이너에서
+검사합니다. 그 컨테이너의 추가 namespace 권한/보안 프로필은 중첩 netns 시험 전용이며
+일반 Docker·네이티브 배포에 적용하지 않습니다. Chromium sandbox 검사도 별도로 유지합니다.

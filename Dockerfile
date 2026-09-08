@@ -18,6 +18,15 @@ FROM base AS ingress
 USER 65534:65534
 ENTRYPOINT ["python", "-m", "cloud_browser.ingress"]
 
+# CI-only nested netns fixture. It is never the default or a deployment target.
+FROM base AS network-manager-test
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    network-manager dbus iproute2 iptables util-linux \
+    && rm -rf /var/lib/apt/lists/* \
+    && useradd --system --no-create-home cb-browser
+ENV CB_NETWORK_TEST=1
+ENTRYPOINT ["python", "/app/scripts/ci_network_manager.py"]
+
 FROM base AS browser
 RUN apt-get update && apt-get install -y --no-install-recommends \
     chromium chromium-sandbox xvfb xauth x11vnc novnc websockify \

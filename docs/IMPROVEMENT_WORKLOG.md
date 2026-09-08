@@ -123,3 +123,25 @@ Do not report unrun installation, isolation or performance tests as passing.
   disposable fixture now explicitly reproduces the reported root-only `0700`
   prefix without inheriting hosted-runner ACLs; production rejection of a
   foreign-owned or group/other-writable existing directory remains unchanged.
+
+## Pi native network-manager finding (2026-09-09)
+
+- `0cb6208` passed all four CI jobs (34259260581): 410 tests passed, four optional
+  browser checks skipped. The Pi then passed its installer/import and public/
+  private permission gates; the earlier failed venv was preserved unchanged.
+- The second Pi comparison again completed only one baseline and one improved
+  Docker run. Native failed before measurement: egress could not bind the exact
+  configured `10.203.87.1:3128`. The original deployment was restored and siblings
+  checked healthy. No native memory-saving result exists yet.
+- Safe timeline shows NM changed the new `cb-host0` from unmanaged to unavailable
+  to disconnected immediately before egress startup. NM was active, networkd/
+  dhcpcd inactive; egress ran in the intended host namespace. There is no failed-
+  moment IP snapshot, so actual IP removal by NM is an inference, not a proven
+  event. The observed overlapping device management is independently actionable.
+- Repair relinquishes only the newly created veth pair from NM at runtime before
+  address assignment, verifies IP/link/manager readiness and egress namespace,
+  and separates readiness from identity/firewall-verified teardown. It does not
+  alter host network-manager profiles, reload NM, change other MCPs or widen bind.
+- Added bounded discovery/denial/IP-loss/order regression and an actual NM test
+  in a network-none disposable container. Exact repair CI and a fresh, short Pi
+  native startup gate are required before another full nine-run comparison.

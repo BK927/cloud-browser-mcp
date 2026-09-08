@@ -198,6 +198,7 @@ After=cloud-browser-network.service
 User=cb-egress
 Group=cb-egress
 Environment=CB_EGRESS_BIND={host} CB_EGRESS_PORT=3128
+ExecStartPre={python} -I -m cloud_browser.native verify-egress --config {ETC}/native.json
 ExecStart={python} -I -m cloud_browser.egress
 MemoryMax=128M
 TasksMax=80

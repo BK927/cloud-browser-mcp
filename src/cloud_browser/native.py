@@ -6,14 +6,120 @@ import ipaddress
 import json
 import os
 import re
+import shutil
 import subprocess
+import time
 from pathlib import Path
 
 from .resources import cgroup_paths
 
 
 def run(*argv, check=True):
-    return subprocess.run(argv, check=check, text=True, capture_output=True, timeout=15)
+    return subprocess.run(
+        argv,
+        check=check,
+        text=True,
+        capture_output=True,
+        timeout=15,
+        env=os.environ | {"LC_ALL": "C"},
+    )
+
+
+def network_manager_active():
+    if not shutil.which("nmcli"):
+        if (
+            run(
+                "systemctl", "is-active", "--quiet", "NetworkManager.service", check=False
+            ).returncode
+            == 0
+        ):
+            raise RuntimeError("NATIVE_MANAGER_UNVERIFIED: active NetworkManager needs nmcli")
+        return False
+    result = run("nmcli", "--wait", "2", "-t", "-f", "RUNNING", "general", check=False)
+    if result.returncode == 0 and result.stdout.strip() == "running":
+        return True
+    if result.returncode in (0, 8) and result.stdout.strip() in ("", "not running"):
+        return False
+    raise RuntimeError("NATIVE_MANAGER_UNVERIFIED: cannot read NetworkManager running state")
+
+
+def nm_device_state(name):
+    result = run(
+        "nmcli",
+        "--wait",
+        "2",
+        "-g",
+        "GENERAL.STATE",
+        "device",
+        "show",
+        name,
+        check=False,
+    )
+    if result.returncode == 10:
+        return None  # Newly created device has not reached NetworkManager yet.
+    match = re.match(r"^(\d+)(?:\s|$)", result.stdout.strip())
+    if result.returncode != 0 or not match:
+        raise RuntimeError(f"NATIVE_MANAGER_UNVERIFIED: cannot read device state for {name}")
+    return int(match.group(1))
+
+
+def unmanage_created_interfaces(config):
+    """Only called after this invocation created its collision-checked veth pair."""
+    if not network_manager_active():
+        return
+    for name in (config["host_interface"], config["peer_interface"]):
+        # Do not apply a network-manager mutation to an arbitrary existing link.
+        links = json.loads(run("ip", "-j", "-d", "link", "show", "dev", name).stdout)
+        if len(links) != 1 or links[0].get("linkinfo", {}).get("info_kind") != "veth":
+            raise RuntimeError("NATIVE_LINK_CHANGED: expected the newly created veth pair")
+        deadline = time.monotonic() + 8
+        dispatched = False
+        while True:
+            if not dispatched:
+                result = run(
+                    "nmcli",
+                    "--wait",
+                    "2",
+                    "device",
+                    "set",
+                    name,
+                    "managed",
+                    "no",
+                    check=False,
+                )
+                if result.returncode not in (0, 10):
+                    raise RuntimeError(f"NATIVE_MANAGER_UNVERIFIED: cannot unmanage {name}")
+                dispatched = result.returncode == 0
+            if dispatched and nm_device_state(name) == 10:
+                break
+            if time.monotonic() >= deadline:
+                raise RuntimeError(f"NATIVE_MANAGER_UNVERIFIED: {name} did not become unmanaged")
+            time.sleep(0.2)
+
+
+def verify_link(config, *, peer=False, inside=False):
+    name = config["peer_interface" if peer else "host_interface"]
+    address = config["peer_ip" if peer else "host_ip"]
+    args = ("ip", "-j", "-d", "address", "show", "dev", name)
+    result = ns(config, *args) if peer and not inside else run(*args)
+    links = json.loads(result.stdout)
+    if len(links) != 1 or links[0].get("linkinfo", {}).get("info_kind") != "veth":
+        raise RuntimeError(f"NATIVE_LINK_CHANGED: {name} is not the expected veth")
+    ipv4 = {
+        (item.get("local"), item.get("prefixlen"))
+        for item in links[0].get("addr_info", [])
+        if item.get("family") == "inet"
+    }
+    if ipv4 != {(address, 30)} or "UP" not in links[0].get("flags", []):
+        raise RuntimeError(
+            f"NATIVE_LINK_NOT_READY: {name} needs its configured IPv4/30 and UP state"
+        )
+
+
+def verify_host_ready(config):
+    if network_manager_active() and nm_device_state(config["host_interface"]) != 10:
+        raise RuntimeError("NATIVE_MANAGER_UNVERIFIED: host veth is not unmanaged")
+    verify_link(config)
 
 
 def load_config(path):
@@ -51,7 +157,7 @@ def marker_path(config):
     return Path("/run") / (config["namespace"] + "-isolation.json")
 
 
-def verify_network(config):
+def verify_network(config, *, ready=True):
     marker = marker_path(config)
     info = marker.stat()
     if marker.is_symlink() or info.st_uid != 0 or info.st_mode & 0o022:
@@ -92,6 +198,9 @@ def verify_network(config):
         "ACCEPT",
     )
     run("iptables", "-C", "CB_NATIVE_INGRESS", "-j", "REJECT")
+    if ready:
+        verify_host_ready(config)
+        verify_link(config, peer=True)
 
 
 def browser_rules(config):
@@ -165,6 +274,9 @@ def network_up(config):
         "name",
         config["peer_interface"],
     )
+    # Finish per-device manager handoff BEFORE setting addresses or moving the
+    # peer. Never reload the manager, edit connection profiles or touch eth*/wlan*.
+    unmanage_created_interfaces(config)
     run("ip", "link", "set", config["peer_interface"], "netns", config["namespace"])
     run("ip", "address", "add", config["host_ip"] + "/30", "dev", config["host_interface"])
     run("ip", "link", "set", config["host_interface"], "up")
@@ -243,7 +355,7 @@ def network_down(config):
     marker = marker_path(config)
     if not marker.exists():
         raise RuntimeError("Refusing to remove an unowned namespace; inspect failed setup manually")
-    verify_network(config)
+    verify_network(config, ready=False)
     # Only exact dedicated targets. No flushing host INPUT/OUTPUT or Docker rules.
     run("iptables", "-D", "INPUT", "-d", config["host_ip"], "-j", "CB_NATIVE_INGRESS")
     run("iptables", "-F", "CB_NATIVE_INGRESS")
@@ -279,14 +391,38 @@ def verify_runtime(settings):
         raise RuntimeError("Native listener or egress route does not match isolated configuration")
     if settings.development or not settings.network_isolated:
         raise RuntimeError("Native operational mode cannot use development/network bypass settings")
+    verify_link(config, peer=True, inside=True)
+
+
+def verify_egress(config):
+    """Unprivileged ExecStartPre: host namespace/address and fixed proxy binding."""
+    if Path("/proc/self/ns/net").stat().st_ino != Path("/proc/1/ns/net").stat().st_ino:
+        raise RuntimeError("NATIVE_LINK_CHANGED: egress must run in the host network namespace")
+    marker = marker_path(config)
+    info = marker.stat()
+    if marker.is_symlink() or info.st_uid != 0 or info.st_mode & 0o022:
+        raise RuntimeError("Isolation attestation is not protected")
+    if json.loads(marker.read_text()) != {
+        "fingerprint": fingerprint(config),
+        "network_inode": Path("/run/netns", config["namespace"]).stat().st_ino,
+    }:
+        raise RuntimeError("Native namespace identity/configuration changed")
+    if os.getenv("CB_EGRESS_BIND") != config["host_ip"] or os.getenv("CB_EGRESS_PORT") != "3128":
+        raise RuntimeError("NATIVE_LINK_CHANGED: egress bind must match the isolated configuration")
+    verify_host_ready(config)
 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("operation", choices=["network-up", "network-down", "verify-network"])
+    parser.add_argument(
+        "operation", choices=["network-up", "network-down", "verify-network", "verify-egress"]
+    )
     parser.add_argument("--config", required=True)
     args = parser.parse_args()
     configuration = load_config(args.config)
-    {"network-up": network_up, "network-down": network_down, "verify-network": verify_network}[
-        args.operation
-    ](configuration)
+    {
+        "network-up": network_up,
+        "network-down": network_down,
+        "verify-network": verify_network,
+        "verify-egress": verify_egress,
+    }[args.operation](configuration)
