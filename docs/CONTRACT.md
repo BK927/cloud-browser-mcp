@@ -14,6 +14,12 @@ MCP SDK의 `tools/list` 입력 schema가 정확한 타입·범위의 기준입�
 `structuredContent`와 text content에 담고 이미지 바이트는 별도 MCP image content로
 반환합니다. JSON의 이미지 설명에만 base64를 넣는 방식이 아닙니다.
 
+17개 도구 모두 `tools/list`에 `outputSchema`를 선언합니다. 공통 응답과 함께 임대 ID,
+관찰 커서·스크린샷 ID, 승인·작업 상태, 파일 핸들 등 도구별 결과 구조를 설명합니다.
+오류·사용자 제어 요청에서는 도구별 성공 필드가 생략될 수 있으며 기존 null과 이미지
+content는 유지합니다. 페이지 제공 도구의 임의 JSON과 확장 메타데이터도 보존합니다.
+서버 업데이트 후 연결된 앱의 도구 목록을 다시 갱신해야 새 출력 스키마가 반영됩니다.
+
 status: `ok`, `no_change`, `confirmation_required`, `user_action_required`, `blocked`, `error`.
 JSON/schema 자체가 잘못된 요청은 SDK 단계의 표준 MCP 오류이며 브라우저 실행 전에
 거부됩니다. `request_id`는 서버 추적 ID이고 idempotency key가 아닙니다.
