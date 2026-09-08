@@ -62,6 +62,13 @@ def main():
         return original_command(*args, **kwargs)
 
     installer.command = ci_command
+    # Pin the reported Pi boundary, independently of any default ACL on the
+    # hosted runner's /opt. Only this collision-checked, newly created fixture.
+    installer.PREFIX.mkdir(mode=0o700)
+    installer.PREFIX.chmod(0o700)
+    for attribute in os.listxattr(installer.PREFIX):
+        if attribute in ("system.posix_acl_access", "system.posix_acl_default"):
+            os.removexattr(installer.PREFIX, attribute)
     engine = installer.PREFIX / "chromium-ci-engine"
     installer.write(
         engine,

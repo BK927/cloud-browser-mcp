@@ -34,7 +34,8 @@ def public_directory(path):
     metadata = path.stat()
     if metadata.st_uid != os.geteuid() or metadata.st_mode & 0o022:
         raise RuntimeError(
-            f"Public installation directory must be installer-owned and protected: {path}"
+            f"Public installation directory must be installer-owned and protected: {path} "
+            f"(uid={metadata.st_uid}, mode={metadata.st_mode & 0o7777:04o})"
         )
     # mkdir's mode is still filtered by the caller's umask. Also repair parent
     # directories created by an earlier failed 077 install, without a recursive

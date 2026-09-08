@@ -118,3 +118,8 @@ Do not report unrun installation, isolation or performance tests as passing.
 - Regression coverage adds POSIX mode/symlink/failure tests and real CI native
   install plus same-release update under `0077`, with negative credential access
   checks. Exact repair-commit CI and a fresh Pi comparison remain required.
+- First repair CI (`9fe97cf`, run 34258921778) passed the POSIX unit tests, but
+  the installer rejected the CI-created diagnostic prefix as unprotected. The
+  disposable fixture now explicitly reproduces the reported root-only `0700`
+  prefix without inheriting hosted-runner ACLs; production rejection of a
+  foreign-owned or group/other-writable existing directory remains unchanged.
