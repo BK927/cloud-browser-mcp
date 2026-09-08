@@ -166,7 +166,10 @@ def verify_network(config, *, ready=True):
     inode = Path("/run/netns", config["namespace"]).stat().st_ino
     if inode == Path("/proc/1/ns/net").stat().st_ino:
         raise RuntimeError("Native namespace cannot be the host network namespace")
-    if saved != {"fingerprint": fingerprint(config), "network_inode": inode}:
+    expected = {"fingerprint": fingerprint(config), "network_inode": inode}
+    if ready or "host_network_inode" in saved:
+        expected["host_network_inode"] = Path("/proc/self/ns/net").stat().st_ino
+    if saved != expected:
         raise RuntimeError("Native namespace identity/configuration changed")
     if ns(config, "ip", "route", "show", "default").stdout.strip():
         raise RuntimeError("Browser namespace must not have a default route")
@@ -342,6 +345,7 @@ def network_up(config):
             {
                 "fingerprint": fingerprint(config),
                 "network_inode": Path("/run/netns", config["namespace"]).stat().st_ino,
+                "host_network_inode": Path("/proc/self/ns/net").stat().st_ino,
             }
         )
     )
@@ -396,8 +400,6 @@ def verify_runtime(settings):
 
 def verify_egress(config):
     """Unprivileged ExecStartPre: host namespace/address and fixed proxy binding."""
-    if Path("/proc/self/ns/net").stat().st_ino != Path("/proc/1/ns/net").stat().st_ino:
-        raise RuntimeError("NATIVE_LINK_CHANGED: egress must run in the host network namespace")
     marker = marker_path(config)
     info = marker.stat()
     if marker.is_symlink() or info.st_uid != 0 or info.st_mode & 0o022:
@@ -405,6 +407,9 @@ def verify_egress(config):
     if json.loads(marker.read_text()) != {
         "fingerprint": fingerprint(config),
         "network_inode": Path("/run/netns", config["namespace"]).stat().st_ino,
+        # An unprivileged service must not need ptrace access to root PID 1.
+        # Compare its own namespace to the root-created protected attestation.
+        "host_network_inode": Path("/proc/self/ns/net").stat().st_ino,
     }:
         raise RuntimeError("Native namespace identity/configuration changed")
     if os.getenv("CB_EGRESS_BIND") != config["host_ip"] or os.getenv("CB_EGRESS_PORT") != "3128":

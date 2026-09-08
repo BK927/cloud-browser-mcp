@@ -212,3 +212,33 @@ def test_native_egress_has_readiness_gate_and_no_global_nm_mutation():
     assert "ExecStartPre={python} -I -m cloud_browser.native verify-egress" in text
     text = (source / "src/cloud_browser/native.py").read_text()
     assert '"connection", "reload"' not in text and '"networking", "off"' not in text
+
+
+@pytest.mark.parametrize("own_inode", [456, 789])
+def test_unprivileged_egress_uses_root_attestation_not_pid1(monkeypatch, cfg, tmp_path, own_inode):
+    marker = tmp_path / "marker.json"
+    marker.write_text(
+        json.dumps(
+            {
+                "fingerprint": native.fingerprint(cfg),
+                "network_inode": 123,
+                "host_network_inode": 456,
+            }
+        )
+    )
+
+    def path(*args):
+        assert args != ("/proc/1/ns/net",), "Must not require ptrace access to root PID 1"
+        value = own_inode if args == ("/proc/self/ns/net",) else 123
+        return SimpleNamespace(stat=lambda: SimpleNamespace(st_ino=value))
+
+    monkeypatch.setattr(native, "Path", path)
+    monkeypatch.setattr(native, "marker_path", lambda _: marker)
+    monkeypatch.setattr(native, "verify_host_ready", lambda _: None)
+    monkeypatch.setenv("CB_EGRESS_BIND", cfg["host_ip"])
+    monkeypatch.setenv("CB_EGRESS_PORT", "3128")
+    if own_inode == 456:
+        native.verify_egress(cfg)
+    else:
+        with pytest.raises(RuntimeError, match="identity/configuration changed"):
+            native.verify_egress(cfg)
