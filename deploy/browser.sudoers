@@ -1,3 +1,3 @@
 Defaults:app env_keep += "DISPLAY XAUTHORITY"
-app ALL=(browser) NOPASSWD: /usr/bin/chromium
+app ALL=(browser) NOPASSWD: /usr/local/bin/cloud-browser-engine
 app ALL=(root) NOPASSWD: /usr/local/bin/cloud-browser-stop ""

@@ -29,8 +29,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 COPY deploy/chromium-launcher /usr/local/bin/chromium-launcher
 COPY deploy/entrypoint.sh /usr/local/bin/cloud-browser-entrypoint
 COPY deploy/browser-stop /usr/local/bin/cloud-browser-stop
+COPY deploy/browser-engine /usr/local/bin/cloud-browser-engine
 COPY deploy/browser.sudoers /etc/sudoers.d/cloud-browser
-RUN chmod 755 /usr/local/bin/chromium-launcher /usr/local/bin/cloud-browser-entrypoint /usr/local/bin/cloud-browser-stop \
+RUN chmod 755 /usr/local/bin/chromium-launcher /usr/local/bin/cloud-browser-entrypoint /usr/local/bin/cloud-browser-stop /usr/local/bin/cloud-browser-engine \
     && chmod 440 /etc/sudoers.d/cloud-browser && visudo -cf /etc/sudoers.d/cloud-browser
 ENV DISPLAY=:99 CB_CHROMIUM_PATH=/usr/local/bin/chromium-launcher CB_DATA_DIR=/data \
     CB_BIND_HOST=0.0.0.0 CB_BROWSER_PROXY=http://egress:3128 CB_HEADLESS=false

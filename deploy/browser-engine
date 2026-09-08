@@ -1,0 +1,7 @@
+#!/bin/sh
+set -eu
+# Runs AFTER sudo/PAM has selected the dedicated browser identity. Never inherit
+# an operator/desktop user's config directories or Chrome profile override.
+unset XDG_CONFIG_HOME XDG_CACHE_HOME XDG_DATA_HOME XDG_STATE_HOME XDG_RUNTIME_DIR
+unset CHROME_CONFIG_HOME CHROME_USER_DATA_DIR
+exec /usr/bin/chromium "$@"

@@ -2,6 +2,7 @@
 *.sh text eol=lf
 deploy/chromium-launcher text eol=lf
 deploy/browser-stop text eol=lf
+deploy/browser-engine text eol=lf
 deploy/browser.sudoers text eol=lf
 *.py text eol=lf
 *.js text eol=lf

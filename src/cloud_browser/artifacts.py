@@ -3,6 +3,7 @@
 import base64
 import hashlib
 import os
+import re
 import secrets
 import threading
 import time
@@ -13,6 +14,50 @@ from .security import redact
 
 
 class Artifacts:
+    @staticmethod
+    def reap_orphans(parent: Path, active, ttl, *, budget=256):
+        """Bounded cleanup of expired generated files, never profiles/auth state.
+
+        Called at session creation, under the worker's serialization. Unknown
+        names, symlinks, live work directories and recent files are untouched.
+        """
+        if not parent.exists():
+            return 0
+        if parent.is_symlink() or not parent.is_dir() or parent.parent.is_symlink():
+            raise BrowserError("POLICY_BLOCKED", "Artifact root changed", "blocked")
+        cutoff = time.time() - ttl
+        removed = scanned = 0
+        with os.scandir(parent) as directories:
+            for index, directory in enumerate(directories):
+                if index >= 64 or scanned >= budget:
+                    break
+                if (
+                    directory.name in active
+                    or not re.fullmatch(r"ses_[A-Za-z0-9_-]{1,128}", directory.name)
+                    or not directory.is_dir(follow_symlinks=False)
+                ):
+                    continue
+                folder = Path(directory.path)
+                old_directory = directory.stat(follow_symlinks=False).st_mtime <= cutoff
+                with os.scandir(folder) as files:
+                    for item in files:
+                        scanned += 1
+                        if scanned > budget:
+                            break
+                        if (
+                            re.fullmatch(r"[0-9a-fA-F-]{32,64}(?:\.crdownload)?", item.name)
+                            and item.is_file(follow_symlinks=False)
+                            and item.stat(follow_symlinks=False).st_mtime <= cutoff
+                        ):
+                            Path(item.path).unlink(missing_ok=True)
+                            removed += 1
+                if old_directory:
+                    try:
+                        folder.rmdir()  # Only an empty exact generated directory.
+                    except OSError:
+                        pass
+        return removed
+
     def __init__(self, root: Path, *, max_bytes=64 * 1048576, file_bytes=16 * 1048576, ttl=1800):
         self.root = root
         self.max_bytes, self.file_bytes, self.ttl = max_bytes, file_bytes, ttl
@@ -112,6 +157,8 @@ class Artifacts:
         with self.lock:
             self.expire()
             path = self._path(key)
+            if not path.is_file():
+                raise BrowserError("ARTIFACT_NOT_FOUND", "Artifact file was removed")
             item = self.items[key]
             if item["state"] != "completed":
                 raise BrowserError(
@@ -159,6 +206,8 @@ class Artifacts:
         with self.lock:
             self.expire()
             path = self._path(key)
+            if not path.is_file():
+                raise BrowserError("ARTIFACT_NOT_FOUND", "Artifact file was removed")
             if self.items[key]["state"] != "completed":
                 raise BrowserError("ARTIFACT_NOT_READY", "Download is not complete")
             if path.stat().st_size > self.file_bytes:

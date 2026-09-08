@@ -1695,6 +1695,7 @@ class DrissionAdapter:
     def _start_artifacts(self, session_id):
         session = self._session(session_id)
         root = self.cfg.data_dir / "artifacts" / session_id
+        Artifacts.reap_orphans(root.parent, self.sessions, self.cfg.artifact_ttl)
         artifacts = Artifacts(
             root,
             max_bytes=self.cfg.max_artifact_mb * 1048576,

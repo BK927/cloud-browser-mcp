@@ -1,4 +1,5 @@
 import json
+import os
 import time
 
 import pytest
@@ -24,6 +25,26 @@ def test_artifact_isolation_expiry_and_budget(tmp_path):
         first.put(b"a" * 21, "large", "text/plain")
     first.items[key]["expires_at"] = time.time() - 1
     assert first.list() == [] and not list((tmp_path / "one").iterdir())
+
+
+def test_expired_crash_artifacts_do_not_touch_live_or_unknown_files(tmp_path):
+    root = tmp_path / "artifacts"
+    old = Artifacts(root / "ses_old")
+    live = Artifacts(root / "ses_live")
+    old_key = old.put(b"expired", "old.txt", "text/plain")["artifact_id"]
+    live_key = live.put(b"active", "live.txt", "text/plain")["artifact_id"]
+    recent = old.put(b"recent", "recent.txt", "text/plain")["artifact_id"]
+    unknown = old.root / "operator-notes.txt"
+    unknown.write_text("preserve")
+    stamp = time.time() - 3600
+    for file in (old._path(old_key), live._path(live_key), unknown):
+        os.utime(file, (stamp, stamp))
+    assert Artifacts.reap_orphans(root, {"ses_live"}, 1800) == 1
+    assert not old._path(old_key).exists()
+    assert live._path(live_key).is_file() and old._path(recent).is_file() and unknown.is_file()
+    with pytest.raises(BrowserError) as error:
+        old.get(old_key)
+    assert error.value.code == "ARTIFACT_NOT_FOUND"
 
 
 def test_logs_never_capture_console_payload_and_pause_clears():

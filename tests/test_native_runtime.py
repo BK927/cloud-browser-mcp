@@ -72,6 +72,12 @@ def test_container_does_not_start_display_or_vnc_at_boot():
     assert "XAUTHORITY" in (root / "deploy/browser.sudoers").read_text()
     runtime = (root / "src/cloud_browser/runtime.py").read_text()
     assert '"-auth"' in runtime and '"-ac"' not in runtime
+    assert "unset XDG_CONFIG_HOME" in (root / "deploy/browser-engine").read_text()
+    assert (
+        "unset CHROME_CONFIG_HOME CHROME_USER_DATA_DIR"
+        in (root / "deploy/browser-engine").read_text()
+    )
+    assert "cloud-browser-engine" in (root / "deploy/browser.sudoers").read_text()
 
 
 def test_cleanup_failure_blocks_new_browser(monkeypatch, tmp_path):

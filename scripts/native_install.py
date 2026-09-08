@@ -440,7 +440,12 @@ def install(args):
     write(ETC / "runtime.env", runtime_environment(units))
     write(
         PREFIX / "chromium-launcher",
-        f'#!/bin/sh\nset -eu\nexec sudo -n -H -u cb-browser {CHROMIUM} "$@"\n',
+        f'#!/bin/sh\nset -eu\nexec sudo -n -H -u cb-browser {PREFIX}/browser-engine "$@"\n',
+        0o755,
+    )
+    write(
+        PREFIX / "browser-engine",
+        (source / "deploy/browser-engine").read_text().replace("/usr/bin/chromium", CHROMIUM),
         0o755,
     )
     write(
@@ -449,7 +454,7 @@ def install(args):
         0o755,
     )
     sudoers = (
-        f'Defaults:cb-api env_keep += "DISPLAY XAUTHORITY"\ncb-api ALL=(cb-browser) NOPASSWD: {CHROMIUM}\n'
+        f'Defaults:cb-api env_keep += "DISPLAY XAUTHORITY"\ncb-api ALL=(cb-browser) NOPASSWD: {PREFIX}/browser-engine\n'
         + f'cb-api ALL=(root) NOPASSWD: {PREFIX}/browser-stop ""\n'
     )
     write(release / "sudoers", sudoers, 0o440)
@@ -479,6 +484,7 @@ def install(args):
                         ETC / "native.json",
                         ETC / "runtime.env",
                         PREFIX / "chromium-launcher",
+                        PREFIX / "browser-engine",
                         PREFIX / "browser-stop",
                         Path("/etc/sudoers.d/cloud-browser-native"),
                     )

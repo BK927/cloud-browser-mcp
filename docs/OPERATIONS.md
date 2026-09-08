@@ -67,8 +67,10 @@ Defaults: 16 MiB per file, 64 MiB total, 30-minute retention. Download progress
 rejects known oversize totals and cancels on observed quota excess; network
 progress notifications are not a filesystem hard quota. No path is accepted.
 Closing a session removes its registered artifacts. Unclean worker termination
-can leave quarantined files on disk; operator cleanup/installation must not
-mistake them for user profiles or authentication databases.
+can leave quarantined files on disk. The next session's bounded expiry sweep
+removes old generated artifact files only, skipping live work, symlinks and
+unknown names. With no subsequent session, operator cleanup may still be needed;
+it must not mistake artifact files for user profiles or authentication databases.
 
 Exports are bounded rendered text, a new inert escaped-HTML document, or an image
 from the existing privacy-checked capture pipeline. Source truncation is marked.
