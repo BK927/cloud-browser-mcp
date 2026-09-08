@@ -114,6 +114,26 @@ async def main():
                     assert seen["status"] == "ok", seen.get("error")
                     assert any(c.type == "image" for c in raw.content)
                     assert any(p.name() == "Xvfb" for p in processes())
+                    sandboxed = []
+                    for proc in processes():
+                        if "chrome" in proc.name().lower() or "chromium" in proc.name().lower():
+                            try:
+                                fields = dict(
+                                    line.split(":", 1)
+                                    for line in Path(f"/proc/{proc.pid}/status")
+                                    .read_text()
+                                    .splitlines()
+                                    if ":" in line
+                                )
+                                sandboxed.append(
+                                    fields.get("NoNewPrivs", "").strip() == "1"
+                                    and fields.get("Seccomp", "").strip() == "2"
+                                )
+                            except OSError:
+                                pass
+                    assert any(sandboxed), (
+                        "No Chromium child with no-new-privileges and seccomp filtering"
+                    )
                     assert not any("x11vnc" in p.name() for p in processes())
                     manual, _ = await call(
                         "handoff",

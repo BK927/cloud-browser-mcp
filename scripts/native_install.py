@@ -154,7 +154,7 @@ RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK
 # sudo's fixed Chromium/cleanup wrappers and Chromium's sandbox need setuid.
 NoNewPrivileges=false
 CapabilityBoundingSet=CAP_CHOWN CAP_DAC_OVERRIDE CAP_FOWNER CAP_SETUID CAP_SETGID CAP_KILL CAP_SYS_CHROOT CAP_AUDIT_WRITE
-{common}[Install]
+{common.replace("UMask=0077", "UMask=0007")}[Install]
 WantedBy=multi-user.target
 """
     )
@@ -440,7 +440,7 @@ def install(args):
     write(ETC / "runtime.env", runtime_environment(units))
     write(
         PREFIX / "chromium-launcher",
-        f'#!/bin/sh\nset -eu\nexec sudo -n -u cb-browser {CHROMIUM} "$@"\n',
+        f'#!/bin/sh\nset -eu\nexec sudo -n -H -u cb-browser {CHROMIUM} "$@"\n',
         0o755,
     )
     write(
@@ -513,11 +513,21 @@ def uninstall(args):
     platform_check()
     manifest = json.loads((ETC / "install.json").read_text())
     cfg = json.loads((ETC / "native.json").read_text())
+    for filename, digest in manifest.get("managed_sha256", {}).items():
+        path = Path(filename)
+        if path.is_symlink() or (
+            path.exists() and hashlib.sha256(path.read_bytes()).hexdigest() != digest
+        ):
+            raise RuntimeError(f"Modified native file requires operator review: {path}")
     for filename, digest in manifest["unit_sha256"].items():
         path = UNITS / filename
-        if path.exists() and hashlib.sha256(path.read_bytes()).hexdigest() != digest:
+        if path.is_symlink() or (
+            path.exists() and hashlib.sha256(path.read_bytes()).hexdigest() != digest
+        ):
             raise RuntimeError(f"Modified unit requires operator review: {path}")
-    command("systemctl", "disable", "--now", *[name + ".service" for name in NAMES])
+    installed = [name + ".service" for name in NAMES if (UNITS / (name + ".service")).exists()]
+    if installed:
+        command("systemctl", "disable", "--now", *installed)
     for filename in manifest["unit_sha256"]:
         (UNITS / filename).unlink(missing_ok=True)
     Path("/etc/sudoers.d/cloud-browser-native").unlink(missing_ok=True)
@@ -533,6 +543,7 @@ def uninstall(args):
             or len(target.parts) < 4
             or not target.name.startswith("cloud-browser")
             or not (target / ".native-owned").is_file()
+            or (target / ".instance.lock").is_symlink()
         ):
             raise RuntimeError("Refusing to purge an unverified data target")
         with (target / ".instance.lock").open("a+b") as lock:

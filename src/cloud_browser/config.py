@@ -10,7 +10,9 @@ from .authentication import AuthRule
 
 
 class Settings(BaseSettings):
-    model_config = SettingsConfigDict(env_prefix="CB_", env_file=".env", extra="ignore")
+    model_config = SettingsConfigDict(
+        env_prefix="CB_", env_file=".env", extra="ignore", hide_input_in_errors=True
+    )
 
     data_dir: Path = Path("data")
     public_origin: str = "http://127.0.0.1:8000"

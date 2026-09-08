@@ -41,6 +41,7 @@ def test_native_units_preserve_isolation_and_equal_budget():
     assert "NetworkNamespacePath=/run/netns/cb-browser" in api
     assert "CB_NETWORK_ISOLATED=true" in api and "CB_DEVELOPMENT=false" in api
     assert "User=cb-api" in api and "CB_BROWSER_GROUP=cb-browser" in api
+    assert "UMask=0007" in api  # Drission-created profile files must be browser-group readable.
     assert "CB_MANAGED_DISPLAY=true" in api and "KillMode=control-group" in api
     assert api.index("EnvironmentFile=/etc/cloud-browser/runtime.env") > api.index(
         "EnvironmentFile=/etc/cloud-browser/browser.env"

@@ -46,6 +46,9 @@ sudo python3 scripts/native_install.py update --source . --start
 세션이 없으면 Chromium/Xvfb가 없습니다. 로그인/handoff 때만 x11vnc·WebSocket 중계를
 띄우고 완료/종료 때 회수합니다. 자동/수동 제어가 같은 Chromium과 보호된 Xauthority를
 공유합니다. 초기 viewport는 1024×768이며 가상 화면 상한은 운영자가 조절합니다.
+Chromium의 HOME은 전용 데이터 아래 `browser-home`이며 프로필 하위 파일은 전용
+browser 그룹으로만 공유합니다. API의 0007 umask는 이 두 UID의 프로필 접근을 위한 값이고,
+자격증명 env·Xauthority·비공개 업로드에는 별도 제한 권한을 적용합니다.
 
 기본 연결은 사용하지 않는 `10.203.87.0/30`입니다. 충돌하면 `--cidr`로 다른 사설 /30을
 선택합니다. 브라우저 namespace에는 default route가 없고 browser UID는 검증 proxy 외
