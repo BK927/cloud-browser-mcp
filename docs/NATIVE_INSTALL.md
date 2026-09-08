@@ -2,7 +2,9 @@
 
 Docker 없이 같은 Python 패키지·DrissionPage 어댑터·MCP 계약을 실행하는 추가 경로입니다.
 지원 대상은 Debian 13 arm64/amd64이며 Windows/macOS는 [Docker](DEPLOYMENT.md)를 사용합니다.
-Pi 영구 전환은 자동으로 수행하지 않습니다. 실제 Pi 비교 결과는 별도 검증 관문입니다.
+Pi 영구 전환은 자동으로 수행하지 않습니다. Debian 13 arm64의 설치·3회 workload와
+Docker 비교는 [2026-09-09 실측](PI_COMPARISON_2026-09-09.md)을 통과했습니다.
+네이티브의 추가 절감은 작았으며 긴 전체 페이지 캡처는 1GiB 예산에서 거절됐습니다.
 
 ## 처음 설치
 
@@ -128,8 +130,9 @@ sudo python3 scripts/native_install.py uninstall
 Linux CI는 `umask 077`의 신규 설치·동일 release 업데이트와 자격증명 접근 차단,
 실제 unit/netns/UID 차단, MCP 이미지, on-demand 화면/수동 제어, worker 강제
 종료 후 회수를 검사합니다. Ubuntu CI의 Google Chrome 검증은 Debian 설치나 Pi 실측을
-대체하지 않습니다. [동일 예산 비교 절차](PERFORMANCE_COMPARISON.md)를 따르고 절감이
-없거나 실패한 경우도 그대로 기록하세요.
+대체하지 않습니다. Pi arm64의 별도 실측은 위 보고서에 있으며 Debian 13 amd64 현장
+실측까지 완료한 것은 아닙니다. [동일 예산 비교 절차](PERFORMANCE_COMPARISON.md)를
+따르고 절감이 없거나 실패한 경우도 그대로 기록하세요.
 
 실제 NM 회귀는 인터넷과 호스트 mount가 없는 별도 `network-manager-test` CI 컨테이너에서
 검사합니다. 그 컨테이너의 추가 namespace 권한/보안 프로필은 중첩 netns 시험 전용이며

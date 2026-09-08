@@ -71,7 +71,8 @@ Do not report unrun installation, isolation or performance tests as passing.
   Local final regression: 402 passed / 4 skipped / 1 upstream warning (284.34 s).
   Focused native/control safety checks: 15 passed after fixing two test-only
   platform/assertion-placement mistakes; production assertions were not relaxed.
-- Remaining: exact stage 4 regression/CI and deployment-owner Pi comparison.
+- At this stage-4 checkpoint, remaining: exact regression/CI and owner Pi comparison
+  (completed later; see the final comparison section below).
   No native performance savings have been established. No operational deployment
   has been requested for this intermediate source.
 
@@ -145,3 +146,29 @@ Do not report unrun installation, isolation or performance tests as passing.
 - Added bounded discovery/denial/IP-loss/order regression and an actual NM test
   in a network-none disposable container. Exact repair CI and a fresh, short Pi
   native startup gate are required before another full nine-run comparison.
+
+## Final Pi comparison and restoration (2026-09-09)
+
+- Measured source: `3a172a12334378e958f4c84d4d944436b24d6442`.
+  [Exact-commit CI 34266596406](https://github.com/BK927/cloud-browser-mcp/actions/runs/34266596406)
+  passed tests, Docker runtime, native runtime with actual isolated NM, and
+  arm64/amd64 build. Linux: 513 passed / 4 skipped; local: 509 passed / 8 skipped.
+- Deployment owner passed the fresh Debian 13 arm64 installer/import/network/
+  authenticated-status gate, then measured baseline Docker, improved Docker and
+  improved native three times each at 1GiB RAM + 1GiB swap. All nine benchmark
+  processes exited 0 and closed their sessions. Earlier partial sets are excluded.
+- Idle three-role PSS medians: 256.40 / 190.85 / 179.34MiB. Native saved a further
+  11.51MiB idle and 6.04MiB on the single page relative to improved Docker. The
+  Docker daemon remained active; this is not pure container overhead measurement.
+- RESOURCE_PRESSURE counts were 12 / 3 / 3. All variants refused all three long
+  full-page captures; exit 0 does not mean every request succeeded. No oom or
+  oom_kill increments; native run 1 recorded ten browser memory.events:max events.
+- Original production baseline, credentials, profiles, routes and sibling services
+  were verified restored at 04:46:05 KST. Test containers and four native units are
+  stopped; dedicated test namespace removed. Recovery copies and failed evidence
+  retained. No permanent upgrade or native migration was performed.
+- [Measured report](PI_COMPARISON_2026-09-09.md) and
+  [allowlisted numeric data](benchmarks/pi-2026-09-09.json) record all nine runs,
+  sampling limits, source identities and remaining user-environment gates. New
+  web ChatGPT image understanding and Debian amd64 field deployment are not
+  inferred from Pi/CI results. These documentation changes are not a new release.
