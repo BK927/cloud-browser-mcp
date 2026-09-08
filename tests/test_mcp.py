@@ -53,11 +53,13 @@ async def test_actual_streamable_http_sdk_tools_and_image(tmp_path, real_browser
                 async with ClientSession(*streams) as client:
                     await client.initialize()
                     tools = (await client.list_tools()).tools
-                    assert len(tools) == 10
+                    assert len(tools) == 12
                     assert {t.name for t in tools} >= {
                         "browser_status",
                         "browser_configure",
                         "browser_act",
+                        "browser_list_page_tools",
+                        "browser_call_page_tool",
                     }
                     opened = (await client.call_tool("browser_open", {})).structured_content
                     assert opened["status"] == "ok"
@@ -70,6 +72,13 @@ async def test_actual_streamable_http_sdk_tools_and_image(tmp_path, real_browser
                         (1024, 768) if real_browser else (1, 1)
                     )
                     if real_browser:
+                        page_tools = (
+                            await client.call_tool("browser_list_page_tools", args)
+                        ).structured_content
+                        if page_tools["status"] == "ok":
+                            assert page_tools["page_tools"] == []
+                        else:
+                            assert page_tools["error"]["code"] == "UNSUPPORTED_OPERATION"
                         return
                     proposal = await client.call_tool(
                         "browser_act",

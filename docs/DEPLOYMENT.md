@@ -5,7 +5,8 @@
 
 ## 1. 준비
 
-- Debian 13 64비트 arm64 또는 amd64, Docker Engine + Compose v2.
+- Debian 13 64비트 arm64 또는 amd64, 보안 업데이트된 Docker Engine 28 이상 + Compose.
+  최종 seccomp 기준은 Engine 29.8.0이며 업그레이드 시 실제 sandbox 실행을 재검증합니다.
 - Raspberry Pi 4B 2GB는 목표 장비이며 성능 보증치가 아닙니다.
 - Windows/macOS는 Docker Desktop의 Linux 컨테이너를 사용합니다.
 - 서버와 사용자 기기에 Tailscale 설치, 같은 tailnet 로그인.
@@ -50,7 +51,32 @@ docker buildx build --platform linux/arm64,linux/amd64 --target browser .
 ```
 
 공개 MCP upstream은 `127.0.0.1:8000`, private control upstream은
-`127.0.0.1:8001`입니다. 5900/6080/CDP 포트는 host에 publish하지 않습니다.
+`127.0.0.1:8001`입니다. 별도 `ingress` 컨테이너가 각 포트를 동일한 browser 포트로만
+전달합니다. HTTP 목적지·헤더로 다른 주소를 선택할 수 없는 고정 TCP 중계이며,
+SSE/WebSocket·OAuth·Origin·CSRF 검사는 원래 앱까지 그대로 전달됩니다.
+browser는 여전히 internal 네트워크에만 연결하고 host port를 직접 publish하지 않습니다.
+Docker 26의 internal-only port publishing 실패를 피하기 위한 구조입니다.
+ingress에는 인증정보·프로필 볼륨·추가 capability가 없습니다.
+5900/6080/CDP 포트는 host에 publish하지 않습니다.
+
+Docker 28.0.0 이전은 localhost publish라도 동일 L2 네트워크의 기기에서 접근할 수 있는
+알려진 예외가 있습니다. 운영에서는 보안 업데이트된 Docker를 사용하고, 구버전이라면
+운영자가 host 네트워크 경계를 별도로 검증·차단하기 전 공개 배포를 진행하지 마세요.
+단순히 `127.0.0.1`이 표시된다는 사실만으로 private console 격리를 인증하지 않습니다.
+[Docker의 localhost publish 경고](https://docs.docker.com/engine/network/port-publishing/).
+
+Chromium 컨테이너는 [제한된 seccomp 정책](../deploy/seccomp/README.md)을 사용합니다.
+Docker 기본 정책에서 namespace 생성이 거부되는 경우를 위한 정확한 호출 인자 허용이며,
+Chromium sandbox 자체를 끄지 않습니다. amd64/arm64만 대상으로 하며 원본 정책과 차이를
+함께 제공합니다. Docker/커널 업데이트 시 정책 재검토가 필요합니다.
+
+browser 컨테이너는 외부 DNS에 직접 접근하지 않습니다. entrypoint가 내부 egress의
+숫자 IP를 proxy 설정으로 전달하고, 앱의 URL 검사는 같은 내부 proxy의 DNS-only RPC를
+사용합니다. RPC는 사이트에 접속하지 않으며 실제 연결 때도 DNS/IP 검사를 다시 합니다.
+`EGRESS_UNAVAILABLE`이면 browser/egress가 같은 소스 번들로 빌드됐는지와 내부 proxy
+가동 상태를 확인하세요. 임의 DNS 개방·direct network 연결·개발 모드 전환으로 해결하지
+마세요. 이 RPC는 별도 MCP 도구나 host 공개 포트가 아닙니다.
+
 프로필은 `browser_data` 볼륨에 남습니다. 종료해도 프로필을 자동 삭제하지 않습니다.
 새 세션 ID로 새 프로필을 만들며 이전 로그인 상태를 새 세션으로 몰래 옮기지 않습니다.
 장기 운영 시 오래된 프로필 보관·디스크 사용량 정리는 운영자가 결정해야 합니다.
@@ -96,7 +122,7 @@ tailscale serve --bg --https=8443 http://127.0.0.1:8001
 최초 연결 시 공개 OAuth 페이지에서 **서버 관리자 암호**로 승인합니다. 웹사이트 암호를
 이 페이지에 입력하지 마세요. 웹사이트 로그인은 tailnet 전용 콘솔의 원격 화면에서만 합니다.
 
-도구 10개를 확인한 다음 [검증 절차](VALIDATION.md)의 이미지 인식 시험을 수행합니다.
+도구 12개를 확인한 다음 [검증 절차](VALIDATION.md)의 이미지 인식 시험을 수행합니다.
 OAuth HTTP 테스트 성공만으로 실제 ChatGPT 호환을 완료 처리하지 않습니다.
 
 ## 5. 수동 로그인·승인
@@ -114,11 +140,24 @@ WebAuthn passkey·보안 키 전달은 지원하지 않습니다. 가능한 다�
 
 ## 자원·운영
 
-예시 1400MB browser/128MB proxy/256MB shared memory는 시작 제안값일 뿐 Pi 실측치가
+예시 1400MB browser/128MB proxy/64MB ingress/256MB shared memory는 시작 제안값일 뿐 Pi 실측치가
 아닙니다. 물리 RAM, 다른 서비스, cgroup headroom을 함께 확인하세요. `/dev/shm`도
 메모리 예산에 포함됩니다. 장시간 swap 의존은 권장하지 않습니다.
 
+이 숫자는 선점 메모리가 아닌 상한입니다. ingress 프로세스의 실제 사용량도 별도
+측정하며 Docker 관리 프로세스 자체의 사용량과 합쳐서 보고하지 않습니다.
+`docker info`에서 memory limit 미지원 경고가 있거나 실제 cgroup `memory.max`가
+기대와 다르면 보호된 자원 제한이라고 간주하지 마세요. 부팅 설정·재부팅은 운영자가
+기존 서비스 영향을 검토한 후 수행하며 설치 스크립트가 자동 변경하지 않습니다.
+
 AI 변경 가능: viewport, JPEG quality, max_chars, wait_ms.
+자원 응답은 원시 cgroup 사용량과 회수 가능 캐시 추정량을 구분합니다.
+`available_mb`는 두 값을 고려한 추정치이며 빈 RAM이나 할당 보증이 아닙니다.
+비활성 파일 캐시 중 dirty/writeback/unevictable을 제외한 부분만 인정하고
+호스트 MemAvailable·기존 안전 여유를 함께 적용합니다. `/dev/shm`·익명 메모리·
+활성 페이지·slab를 추가 가용 메모리로 계산하지 않으며 캐시 강제 삭제도 하지 않습니다.
+자세한 필드는 [자원 보고 계약](CONTRACT_EXTENSIONS.md#자원-보고의-캐시-구분)을 참고하세요.
+
 운영자만 변경: 메모리 reserve/admission 예산, 최대 캡처 픽셀, 세션 수·TTL, 인증·포트.
 수동 화면은 하나이므로 `CB_MAX_SESSIONS=1`일 때만 handoff를 제공합니다.
 

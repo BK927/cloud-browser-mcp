@@ -1,6 +1,9 @@
 # 검증 기록과 출시 관문
 
-작성 기준: 2026-09-05. **아래 로컬 통과를 Pi/Docker/웹 ChatGPT 통합 완료로 해석하지
+초기 기록: 2026-09-05. 최신 작업본 결과는 [명세 대응 현황](SPEC_STATUS.md)을 참고하세요.
+2026-09-08 Pi 배포 결함 수정·격리 canary는 [배포 수정 기록](DEPLOYMENT_FIXES.md)에
+별도 기록합니다. 아래의 초기 미검증 표기는 그 후속 시험 전 상태입니다.
+**아래 로컬 통과를 Pi/Docker/웹 ChatGPT 통합 완료로 해석하지
 않습니다.** 실제 계정·Funnel 주소·목표 장비 접근 없이 해당 결과를 만들 수 없습니다.
 
 ## 확인한 환경
@@ -12,7 +15,7 @@
 - 이 기록의 로컬 검증 이후 사용자의 요청으로 GitHub에 프로토타입 소스를 공개합니다.
   소스 공개는 Docker/Pi/웹 ChatGPT 통합 관문을 통과했다는 의미가 아닙니다.
 
-최종 로컬 실행: **47 passed**, 의존성 Starlette/AnyIO의 deprecation warning 1건.
+초기 공개 버전의 로컬 실행: **47 passed**, 의존성 Starlette/AnyIO의 deprecation warning 1건.
 공개 W3C live test와 HTTP → 별도 worker → 실제 Chromium → JPEG 전송 시험을 포함합니다.
 정적 검사 및 Python 패키지 빌드도 별도로 수행합니다. Docker daemon은 이 개발 장비에
 없으므로 Compose YAML/포트 분리·쉘 구문 검사만 가능했고 컨테이너 실행은 하지 않았습니다.
@@ -50,7 +53,7 @@ W3C는 [원본 아코디언 예제](https://www.w3.org/WAI/ARIA/apg/patterns/acc
 
 ## 필수 미완료 관문 A — 실제 웹 ChatGPT
 
-1. 운영 HTTPS origin과 정확한 callback으로 OAuth 연결. 도구 10개 확인.
+1. 운영 HTTPS origin과 정확한 callback으로 OAuth 연결. 현 작업본의 도구 12개 확인.
 2. 운영자가 `tests/fixtures/visual-probe.html`을 본인 소유의 **별도 공개 시험 origin**에
    올립니다. MCP public listener에는 새 정적 콘텐츠 경로를 추가하지 않습니다.
 3. ChatGPT에 그 URL을 열고 semantic/interactive만 관찰하게 합니다. 무작위 숫자가
@@ -96,4 +99,5 @@ docker stats --no-stream
 수행 중인 서버를 고의로 종료하지 마세요.
 
 이 관문을 마친 뒤 장비별 결과·제한을 본 문서에 추가해야 정식 지원 범위를 확정할 수
-있습니다. 현재 Docker/하드웨어 실행 결과나 ChatGPT 이미지 인식 결과는 없습니다.
+있습니다. 후속 Docker/Pi 부분 결과는 [배포 수정 기록](DEPLOYMENT_FIXES.md)을 참고하세요.
+실제 ChatGPT 이미지 인식 결과는 아직 없습니다.

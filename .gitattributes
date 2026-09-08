@@ -3,3 +3,4 @@
 deploy/chromium-launcher text eol=lf
 *.py text eol=lf
 *.js text eol=lf
+deploy/seccomp/* text eol=lf

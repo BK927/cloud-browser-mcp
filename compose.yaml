@@ -11,16 +11,30 @@ services:
     mem_limit: ${CB_PROXY_MEMORY_LIMIT:-128m}
     restart: unless-stopped
 
+  # Docker 26 does not publish ports for an internal-only container. Keep the
+  # browser isolated and forward only these two fixed destinations instead.
+  ingress:
+    build:
+      context: .
+      target: ingress
+    depends_on: [browser]
+    networks: [browser_internal, ingress_host]
+    ports:
+      - "127.0.0.1:${CB_PUBLIC_PORT:-8000}:8000"
+      - "127.0.0.1:${CB_CONTROL_PORT:-8001}:8001"
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    pids_limit: 32
+    mem_limit: ${CB_INGRESS_MEMORY_LIMIT:-64m}
+    restart: unless-stopped
+
   browser:
     build:
       context: .
       target: browser
     depends_on: [egress]
     env_file: .env
-    # Bind both upstreams to loopback. Publish only via distinct Tailscale listeners.
-    ports:
-      - "127.0.0.1:${CB_PUBLIC_PORT:-8000}:8000"
-      - "127.0.0.1:${CB_CONTROL_PORT:-8001}:8001"
     environment:
       CB_PUBLIC_PORT: "8000"
       CB_CONTROL_PORT: "8001"
@@ -35,6 +49,8 @@ services:
     # NET_ADMIN installs the UID egress firewall before dropping the app UID.
     # Chromium keeps its sandbox; do not add --no-sandbox or privileged:true.
     cap_add: [NET_ADMIN]
+    security_opt:
+      - seccomp=./deploy/seccomp/chromium.json
     shm_size: ${CB_SHARED_MEMORY:-256m}
     mem_limit: ${CB_BROWSER_MEMORY_LIMIT:-1400m}
     pids_limit: 256
@@ -50,6 +66,7 @@ networks:
   browser_internal:
     internal: true
   internet: {}
+  ingress_host: {}
 
 volumes:
   browser_data: {}

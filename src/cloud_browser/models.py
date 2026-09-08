@@ -45,6 +45,12 @@ class SelectAction(StrictModel):
     value: str = Field(max_length=2000)
 
 
+class UploadAction(StrictModel):
+    type: Literal["upload"]
+    node_id: str
+    upload_ids: list[str] = Field(min_length=1, max_length=8)
+
+
 class CheckAction(StrictModel):
     type: Literal["check"]
     node_id: str
@@ -74,7 +80,8 @@ Action = Annotated[
     | SelectAction
     | CheckAction
     | ScrollAction
-    | CoordinateAction,
+    | CoordinateAction
+    | UploadAction,
     Field(discriminator="type"),
 ]
 

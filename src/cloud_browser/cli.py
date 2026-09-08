@@ -7,7 +7,7 @@ import uvicorn
 from argon2 import PasswordHasher
 
 from .config import Settings
-from .resources import memory_state
+from .diagnostics import doctor_report, self_test
 
 
 async def serve(cfg):
@@ -38,7 +38,8 @@ async def serve(cfg):
 
 def main():
     parser = argparse.ArgumentParser(description="Personal Cloud Browser MCP")
-    parser.add_argument("command", choices=["serve", "hash-password", "doctor", "revoke-all"])
+    parser.add_argument("command", choices=["serve", "hash-password", "doctor", "self-test", "revoke-all"])
+    parser.add_argument("--chromium", help="Chromium executable for isolated self-test only")
     args = parser.parse_args()
     if args.command == "hash-password":
         password = getpass.getpass("Administrator password (at least 14 characters): ")
@@ -46,22 +47,17 @@ def main():
             parser.error("Password is too short or does not match")
         print(PasswordHasher().hash(password))
         return
-    cfg = Settings()
     if args.command == "doctor":
-        print(
-            json.dumps(
-                {
-                    "origins_configured": bool(cfg.public_origin and cfg.control_origin),
-                    "oauth_callbacks_configured": bool(cfg.oauth_redirect_uris),
-                    "network_isolation_operator_asserted": cfg.network_isolated,
-                    "manual_console_assets_present": cfg.novnc_dir.is_dir(),
-                    "memory": memory_state(cfg.memory_reserve_mb),
-                    "development": cfg.development,
-                },
-                indent=2,
-            )
-        )
-    elif args.command == "revoke-all":
+        print(json.dumps(doctor_report(), indent=2))
+        return
+    if args.command == "self-test":
+        result = asyncio.run(self_test(args.chromium))
+        print(json.dumps(result, indent=2))
+        if not result["ok"]:
+            raise SystemExit(1)
+        return
+    cfg = Settings()
+    if args.command == "revoke-all":
         from .store import Store
 
         store = Store(cfg.data_dir / "state.sqlite3")

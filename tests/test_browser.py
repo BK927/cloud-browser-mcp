@@ -18,7 +18,7 @@ pytestmark = pytest.mark.browser
 
 
 @pytest.fixture
-def browser(tmp_path, monkeypatch):
+def browser(tmp_path, monkeypatch, request):
     executable = os.getenv("CB_TEST_CHROMIUM")
     if not executable:
         pytest.skip("Set CB_TEST_CHROMIUM to a Chromium executable for real browser tests")
@@ -30,7 +30,8 @@ def browser(tmp_path, monkeypatch):
     thread.start()
     base = f"http://127.0.0.1:{server.server_port}"
 
-    def fixture_url_only(url):
+    def fixture_url_only(url, *, dns_proxy=None):
+        assert dns_proxy is None  # The local fixture never claims production isolation.
         if not url.startswith(base + "/"):
             raise BrowserError("INVALID_URL", "Test fixture only")
 
@@ -45,6 +46,8 @@ def browser(tmp_path, monkeypatch):
             browser_proxy="",
         )
     )
+    if getattr(request, "param", None) == "webmcp-experimental":
+        adapter.cfg.webmcp_testing = True
     adapter.open("ses_test", base + "/browser.html")
     tid = adapter.list_tabs("ses_test")["selected_tab_id"]
     yield adapter, "ses_test", tid, base

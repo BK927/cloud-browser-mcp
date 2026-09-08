@@ -16,6 +16,7 @@ from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 
 from .config import Settings
+from .security import public_document_csp
 from .store import Store
 
 
@@ -83,7 +84,7 @@ class Auth:
         async def resource_metadata():
             return {
                 "resource": cfg.resource,
-                "authorization_servers": [cfg.public_origin],
+                "authorization_servers": [cfg.issuer],
                 "scopes_supported": ["browser"],
                 "bearer_methods_supported": ["header"],
             }
@@ -91,10 +92,10 @@ class Auth:
         @app.get("/.well-known/oauth-authorization-server")
         async def server_metadata():
             return {
-                "issuer": cfg.public_origin,
-                "authorization_endpoint": cfg.public_origin + "/authorize",
-                "token_endpoint": cfg.public_origin + "/token",
-                "revocation_endpoint": cfg.public_origin + "/revoke",
+                "issuer": cfg.issuer,
+                "authorization_endpoint": cfg.public_base + "/authorize",
+                "token_endpoint": cfg.public_base + "/token",
+                "revocation_endpoint": cfg.public_base + "/revoke",
                 "response_types_supported": ["code"],
                 "grant_types_supported": ["authorization_code", "refresh_token"],
                 "code_challenge_methods_supported": ["S256"],
@@ -126,10 +127,18 @@ class Auth:
             <h1>Authorize your personal browser</h1><p>This grants ChatGPT control of your server browser.
             Website actions still require separate approval in your private console.</p>
             <p>Client: {html.escape(cfg.oauth_client_id)}</p>
-            <form method=post action=/authorize><input type=hidden name=nonce value='{nonce}'>
+            <form method=post action={cfg.authorization_path}><input type=hidden name=nonce value='{nonce}'>
             <label>Administrator password <input type=password name=password required autocomplete=current-password maxlength=1024></label>
             <button>Authorize</button></form>"""
-            result = HTMLResponse(body)
+            result = HTMLResponse(
+                body,
+                headers={
+                    "Content-Security-Policy": public_document_csp(q["redirect_uri"]),
+                    # no-referrer makes Chrome send Origin: null on form POST.
+                    # The 303 response still suppresses referrers to the callback.
+                    "Referrer-Policy": "same-origin",
+                },
+            )
             result.set_cookie(
                 "cb_oauth",
                 nonce,
@@ -137,7 +146,7 @@ class Auth:
                 httponly=True,
                 samesite="lax",
                 max_age=300,
-                path="/authorize",
+                path=cfg.authorization_path,
             )
             return result
 
@@ -152,7 +161,11 @@ class Auth:
             if not nonce or not hmac.compare_digest(nonce, request.cookies.get("cb_oauth", "")):
                 return JSONResponse({"error": "invalid_request"}, status_code=403)
             q = self.store.pop("authorize", nonce)
-            if not q or not await self.password_ok(str(form.get("password", ""))):
+            if (
+                not q
+                or q.get("resource") != cfg.resource
+                or not await self.password_ok(str(form.get("password", "")))
+            ):
                 return JSONResponse({"error": "access_denied"}, status_code=403)
             code = secrets.token_urlsafe(32)
             self.store.put("code", code, q, 60)
@@ -160,10 +173,10 @@ class Auth:
             result = RedirectResponse(
                 q["redirect_uri"]
                 + separator
-                + urlencode({"code": code, "state": q["state"], "iss": cfg.public_origin}),
+                + urlencode({"code": code, "state": q["state"], "iss": cfg.issuer}),
                 status_code=303,
             )
-            result.delete_cookie("cb_oauth", path="/authorize")
+            result.delete_cookie("cb_oauth", path=cfg.authorization_path)
             return result
 
         @app.post("/token")
@@ -182,6 +195,7 @@ class Auth:
                 )
                 if (
                     not q
+                    or q.get("resource") != cfg.resource
                     or not re.fullmatch(r"[A-Za-z0-9._~-]{43,128}", verifier)
                     or not hmac.compare_digest(challenge, q["code_challenge"])
                     or f.get("redirect_uri") != q["redirect_uri"]
@@ -191,7 +205,11 @@ class Auth:
                 self.store.put("grant", grant, {"active": True}, cfg.refresh_ttl)
             elif f.get("grant_type") == "refresh_token":
                 q = self.store.pop("refresh", str(f.get("refresh_token", "")))
-                if not q or not self.store.get("grant", q["grant"]):
+                if (
+                    not q
+                    or q.get("resource") != cfg.resource
+                    or not self.store.get("grant", q["grant"])
+                ):
                     return bad
                 grant = q["grant"]
             else:

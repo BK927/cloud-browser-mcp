@@ -3,6 +3,7 @@ ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 UV_PROJECT_ENVIRONMENT=/opt/ven
 WORKDIR /app
 COPY pyproject.toml README.md /app/
 COPY LICENSE THIRD_PARTY_NOTICES.md /app/
+COPY deploy/seccomp /app/deploy/seccomp
 COPY docs /app/docs
 COPY uv.lock /app/uv.lock
 COPY src /app/src
@@ -12,6 +13,10 @@ RUN pip install --no-cache-dir uv==0.12.9 && uv sync --frozen --no-dev --no-edit
 FROM base AS egress
 USER 65534:65534
 ENTRYPOINT ["python", "-m", "cloud_browser.egress"]
+
+FROM base AS ingress
+USER 65534:65534
+ENTRYPOINT ["python", "-m", "cloud_browser.ingress"]
 
 FROM base AS browser
 RUN apt-get update && apt-get install -y --no-install-recommends \

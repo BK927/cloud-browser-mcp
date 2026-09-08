@@ -9,10 +9,12 @@ from urllib.parse import urlsplit
 
 import websockets
 from fastapi import FastAPI, Request, WebSocket
-from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
+from starlette.datastructures import UploadFile
 
 from .models import BrowserError
+from .uploads import BodyLimit
 
 
 def control_app(cfg, auth, service):
@@ -29,14 +31,22 @@ def control_app(cfg, auth, service):
             and request.url.path != "/healthz"
         ):
             return JSONResponse({"error": "Invalid host"}, status_code=421)
-        if request.url.path not in ("/login", "/healthz") and not identity(request.cookies):
+        if request.url.path not in ("/login", "/healthz", "/favicon.ico") and not identity(
+            request.cookies
+        ):
             return RedirectResponse("/login", status_code=303)
         if request.method == "POST" and request.headers.get("origin") != cfg.control_origin:
             return JSONResponse({"error": "Invalid origin"}, status_code=403)
         result = await call_next(request)
         result.headers["Cache-Control"] = "no-store"
         result.headers["X-Content-Type-Options"] = "nosniff"
-        result.headers["Referrer-Policy"] = "no-referrer"
+        # Preserve a real Origin on same-origin form POSTs without accepting null.
+        # Cross-origin referrers remain suppressed; non-documents keep no-referrer.
+        result.headers["Referrer-Policy"] = (
+            "same-origin"
+            if result.headers.get("content-type", "").startswith("text/html")
+            else "no-referrer"
+        )
         result.headers["Content-Security-Policy"] = (
             "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; form-action 'self'; base-uri 'none'"
         )
@@ -45,6 +55,12 @@ def control_app(cfg, auth, service):
     @app.get("/healthz")
     async def health():
         return {"ok": True}
+
+    @app.get("/favicon.ico")
+    async def favicon():
+        # A browser's automatic icon request must not redirect to /login and
+        # replace the nonce cookie belonging to the already visible login form.
+        return Response(status_code=204)
 
     @app.get("/login")
     async def login():
@@ -96,6 +112,7 @@ def control_app(cfg, auth, service):
         user = identity(request.cookies)
         form = await request.form()
         if not user or not hmac.compare_digest(str(form.get("csrf", "")), user["csrf"]):
+            await form.close()
             raise BrowserError("CSRF_FAILED", "Invalid console form")
         return form
 
@@ -107,6 +124,16 @@ def control_app(cfg, auth, service):
             "<!doctype html><meta charset=utf-8><title>Private browser console</title><h1>Private browser console</h1>",
             "<p>Only approve actions you recognize. Website text is untrusted. Refresh this page for updates.</p>",
         ]
+        blocks.append(
+            f"<h2>Prepare a file for ChatGPT</h2><p>Selected files become available to the MCP by ID. Uploading to a website still requires a separate approval.</p>"
+            f"<form method=post action='/uploads' enctype='multipart/form-data'><input type=hidden name=csrf value='{csrf}'>"
+            f"<input type=file name=file required><button>Prepare file (maximum {cfg.max_upload_mb} MB)</button></form>"
+        )
+        for item in service.uploads.list():
+            blocks.append(
+                f"<p>{html.escape(item['display_name'])} ({item['size']} bytes)</p>"
+                f"<form method=post action='/uploads/{item['upload_id']}/remove'><input type=hidden name=csrf value='{csrf}'><button>Remove prepared file</button></form>"
+            )
         for review_id, item in list(service.pending.items()):
             if item["expires"] <= time.time():
                 service.pending.pop(review_id, None)
@@ -115,13 +142,20 @@ def control_app(cfg, auth, service):
             if not status or status["state"] != "pending":
                 continue
             display = {
-                "destination": item["confirmation"]["destination"],
+                "current_page": item["confirmation"].get("current_page"),
+                "declared_destination": item["confirmation"]["destination"],
+                "destination_kind": item["confirmation"].get("destination_kind", "unknown"),
+                "destination_verified": False,
+                "data_sent": item["confirmation"]["data_sent"],
+                "data_sent_truncated": item["confirmation"].get("data_sent_truncated", False),
+                "files": item["confirmation"].get("files", []),
                 "summary": item["confirmation"]["summary"],
                 "exact_action": item["action"],
                 "expires_at": item["confirmation"]["expires_at"],
             }
             blocks.append(
                 f"<section><h2>Action approval</h2><pre>{html.escape(json.dumps(display, ensure_ascii=False, indent=2))}</pre>"
+                "<p>The destination is declared by the page, not verified. Scripts and redirects may change it. Null means unknown.</p>"
                 f"<form method=post action='/approval/{review_id}'><input type=hidden name=csrf value='{csrf}'>"
                 "<button name=decision value=approve>Approve once</button><button name=decision value=deny>Deny</button></form></section>"
             )
@@ -129,6 +163,12 @@ def control_app(cfg, auth, service):
             if lease["state"] != "active":
                 continue
             hid = html.escape(lease["handoff_id"], quote=True)
+            if lease["kind"] == "auth":
+                blocks.append(
+                    f"<form method=post action='/handoff/{hid}/auth-result'><input type=hidden name=csrf value='{csrf}'>"
+                    "<button name=outcome value=failed>Report login failed</button>"
+                    "<button name=outcome value=unsupported>Only passkey/security key is available</button></form>"
+                )
             blocks.append(
                 f"<section><h2>Manual control: {html.escape(lease['kind'])}</h2><p>{html.escape(lease['reason'])}</p>"
                 "<p>Switch to the requested tab in the browser if needed. Close credential dialogs before finishing.</p>"
@@ -142,13 +182,43 @@ def control_app(cfg, auth, service):
                     "<p>Remote-control access expired. Automation remains paused until you finish below.</p>"
                 )
             blocks.append(
-                f"<form method=post action='/handoff/{hid}/complete'><input type=hidden name=csrf value='{csrf}'><button>Finish control and return to ChatGPT</button></form></section>"
+                f"<form method=post action='/handoff/{hid}/complete'><input type=hidden name=csrf value='{csrf}'><button>Finish control and return to ChatGPT</button></form>"
+                f"<form method=post action='/handoff/{hid}/renew'><input type=hidden name=csrf value='{csrf}'><button>Extend private control access</button></form>"
+                f"<form method=post action='/handoff/{hid}/cancel'><input type=hidden name=csrf value='{csrf}'><button>Cancel and close this browser session</button></form></section>"
             )
         blocks.append(
             f"<form method=post action=/revoke-all><input type=hidden name=csrf value='{csrf}'><button>Revoke all ChatGPT access</button></form>"
             f"<form method=post action=/logout><input type=hidden name=csrf value='{csrf}'><button>Sign out</button></form>"
         )
         return HTMLResponse("".join(blocks))
+
+    @app.post("/uploads")
+    async def upload(request: Request):
+        form = None
+        try:
+            form = await checked_form(request)
+            source = form.get("file")
+            if not isinstance(source, UploadFile):
+                raise BrowserError("INVALID_INPUT", "Choose one local file")
+            await service.stage_upload(source)
+            return RedirectResponse("/", status_code=303)
+        except BrowserError as exc:
+            code = (
+                403 if exc.code == "CSRF_FAILED" else 413 if exc.code == "UPLOAD_TOO_LARGE" else 409
+            )
+            return JSONResponse({"error": exc.code}, status_code=code)
+        finally:
+            if form is not None:
+                await form.close()
+
+    @app.post("/uploads/{upload_id}/remove")
+    async def remove_upload(upload_id: str, request: Request):
+        try:
+            await checked_form(request)
+            await service.discard_upload(upload_id)
+            return RedirectResponse("/", status_code=303)
+        except BrowserError as exc:
+            return JSONResponse({"error": exc.code}, status_code=409)
 
     @app.post("/approval/{review_id}")
     async def approve(review_id: str, request: Request):
@@ -166,9 +236,47 @@ def control_app(cfg, auth, service):
         try:
             await checked_form(request)
             result = await service.complete_handoff(handoff_id)
-            return HTMLResponse(
-                f"<h1>Control returned</h1><pre>{html.escape(json.dumps(result, ensure_ascii=False, indent=2))}</pre><a href='/'>Console</a>"
+            completed = result["state"] == "completed"
+            title = (
+                "Control returned"
+                if completed
+                else (
+                    "Control not returned — automation remains paused"
+                    if result["automation_paused"]
+                    else "Control not returned — browser session unavailable"
+                )
             )
+            return HTMLResponse(
+                f"<h1>{title}</h1><pre>{html.escape(json.dumps(result, ensure_ascii=False, indent=2))}</pre><a href='/'>Console</a>",
+                status_code=200 if completed else 409,
+            )
+        except BrowserError as exc:
+            return JSONResponse({"error": exc.code}, status_code=409)
+
+    @app.post("/handoff/{handoff_id}/auth-result")
+    async def auth_result(handoff_id: str, request: Request):
+        try:
+            form = await checked_form(request)
+            await service.report_auth_result(handoff_id, form.get("outcome"))
+            return RedirectResponse("/", status_code=303)
+        except BrowserError as exc:
+            return JSONResponse({"error": exc.code}, status_code=409)
+
+    @app.post("/handoff/{handoff_id}/renew")
+    async def renew(handoff_id: str, request: Request):
+        try:
+            await checked_form(request)
+            await service.renew_handoff(handoff_id)
+            return RedirectResponse("/", status_code=303)
+        except BrowserError as exc:
+            return JSONResponse({"error": exc.code}, status_code=409)
+
+    @app.post("/handoff/{handoff_id}/cancel")
+    async def cancel(handoff_id: str, request: Request):
+        try:
+            await checked_form(request)
+            await service.cancel_handoff(handoff_id)
+            return RedirectResponse("/", status_code=303)
         except BrowserError as exc:
             return JSONResponse({"error": exc.code}, status_code=409)
 
@@ -255,4 +363,4 @@ def control_app(cfg, auth, service):
             with contextlib.suppress(Exception):
                 await ws.close()
 
-    return app
+    return BodyLimit(app, cfg.max_upload_mb * 1048576)

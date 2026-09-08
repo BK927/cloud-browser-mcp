@@ -21,12 +21,19 @@
 
 ## 다른 구성요소
 
+`deploy/seccomp/docker-29.8.0.json`은 Docker 29.8.0에 포함된 Moby profiles/seccomp v0.2.3의 원본 정책이며,
+`chromium.json`은 Chromium에 필요한 정확한 namespace 호출 6개를 추가한 수정본입니다.
+두 파일에는 **Apache-2.0**이 적용됩니다. 원본 `LICENSE`·`NOTICE`와 변경 내역을
+같은 디렉터리에 보존했습니다. 루트 MIT로 재라이선스하지 않습니다.
+
 각 배포물의 원래 고지·라이선스를 유지하세요. Docker는 원본 배포판/Python 패키지를
-설치하며 이 저장소에 해당 프로젝트 소스를 복사하여 포함하지 않습니다.
+설치하며 위 명시적인 정책 파일 외 해당 프로젝트 소스를 복사하여 포함하지 않습니다.
 
 - [공식 Python MCP SDK](https://github.com/modelcontextprotocol/python-sdk): MIT.
 - FastAPI, Uvicorn, Pydantic, Argon2, Pillow, psutil, HTTP/WebSocket 라이브러리:
   각 배포물의 고지 참조.
+- [jsonschema](https://github.com/python-jsonschema/jsonschema): MIT. WebMCP 입력 검증에 사용하며
+  referencing 등 전이 의존성도 각 배포물의 고지를 유지합니다.
 - [Chromium](https://www.chromium.org/chromium-os/licenses/): 다수 구성요소별 라이선스.
 - [noVNC](https://github.com/novnc/noVNC): MPL 2.0 및 포함 구성요소별 고지.
 - x11vnc, Xvfb, websockify, Debian 패키지·글꼴: 컨테이너의

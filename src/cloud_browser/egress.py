@@ -9,7 +9,7 @@ import contextlib
 import os
 from urllib.parse import urlsplit
 
-from .security import public_addresses
+from .security import DNS_CHECK_METHOD, DNS_POLICY_HEADER, DNS_POLICY_VERSION, public_addresses
 
 
 class EgressProxy:
@@ -18,6 +18,7 @@ class EgressProxy:
 
     async def handle(self, client_reader, client_writer):
         upstream_writer = None
+        dns_check = False
         try:
             async with self.slots:
                 header = await asyncio.wait_for(client_reader.readuntil(b"\r\n\r\n"), 15)
@@ -25,22 +26,47 @@ class EgressProxy:
                     raise ValueError("Header too large")
                 lines = header.decode("latin-1").split("\r\n")
                 method, target, version = lines[0].split(" ")
+                dns_check = method == DNS_CHECK_METHOD
                 if version not in ("HTTP/1.0", "HTTP/1.1"):
                     raise ValueError("Unsupported protocol")
                 tunnel = method == "CONNECT"
-                parsed = urlsplit("//" + target if tunnel else target)
-                if parsed.username or parsed.password or not parsed.hostname:
+                parsed = urlsplit("//" + target if tunnel or dns_check else target)
+                if (
+                    parsed.username is not None
+                    or parsed.password is not None
+                    or not parsed.hostname
+                ):
                     raise ValueError("Invalid destination")
-                port = parsed.port or (443 if tunnel else 80)
+                port = parsed.port if parsed.port is not None else (443 if tunnel else 80)
+                if dns_check and (
+                    parsed.port is None
+                    or parsed.netloc != target
+                    or parsed.path
+                    or parsed.query
+                    or parsed.fragment
+                ):
+                    raise ValueError("DNS check requires a host:port authority")
                 if (
                     port not in (80, 443)
                     or (tunnel and port != 443)
-                    or (not tunnel and parsed.scheme != "http")
+                    or (not tunnel and not dns_check and parsed.scheme != "http")
                 ):
                     raise ValueError("Unsupported scheme or port")
                 addresses = await asyncio.wait_for(
                     asyncio.to_thread(public_addresses, parsed.hostname, port), 10
                 )
+                if dns_check:
+                    # Internal-only, DNS-only response: no IPs, target connection,
+                    # page content, forwarding or durable authorization token.
+                    client_writer.write(
+                        (
+                            "HTTP/1.1 204 No Content\r\n"
+                            f"{DNS_POLICY_HEADER}: {DNS_POLICY_VERSION}\r\n"
+                            "Connection: close\r\n\r\n"
+                        ).encode("ascii")
+                    )
+                    await client_writer.drain()
+                    return
                 # Connect to this checked numeric address; never resolve the name again.
                 upstream_reader, upstream_writer = await asyncio.wait_for(
                     asyncio.open_connection(addresses[0], port), 15
@@ -91,8 +117,13 @@ class EgressProxy:
                     await asyncio.gather(*tasks, return_exceptions=True)
         except Exception:
             with contextlib.suppress(Exception):
+                policy = f"{DNS_POLICY_HEADER}: {DNS_POLICY_VERSION}\r\n" if dns_check else ""
                 client_writer.write(
-                    b"HTTP/1.1 403 Forbidden\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+                    (
+                        "HTTP/1.1 403 Forbidden\r\n"
+                        + policy
+                        + "Content-Length: 0\r\nConnection: close\r\n\r\n"
+                    ).encode("ascii")
                 )
                 await client_writer.drain()
         finally:
