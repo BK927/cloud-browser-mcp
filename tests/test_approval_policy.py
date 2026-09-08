@@ -95,14 +95,8 @@ def test_balanced_allows_recognized_actions_and_strict_does_not(action, meta):
         ({"type": "double_click_at"}, VIEW),
         ({"type": "upload"}, SEARCH),
         ({"type": "page_tool"}, SEARCH),
-        ({"type": "fill"}, {"tag": "textarea", "name": "Message", "editable": True}),
-        ({"type": "fill"}, {"tag": "input", "type": "text", "name": "Display name"}),
         ({"type": "check"}, {"tag": "input", "type": "checkbox", "name": "Enable access"}),
         ({"type": "select"}, {"tag": "select", "name": "Permission"}),
-        ({"type": "fill"}, SEARCH | {"form_method": "POST"}),
-        ({"type": "fill"}, SEARCH | {"form_action": "https://other.example/search"}),
-        ({"type": "fill"}, SEARCH | {"form_action": "https://example.com:444/search"}),
-        ({"type": "fill"}, SEARCH | {"form_action": "https://example.com/submit"}),
         (
             {"type": "keypress", "keys": ["ENTER"]},
             SEARCH | {"search_submitter_name": "Delete account"},
@@ -135,14 +129,8 @@ def test_balanced_allows_recognized_actions_and_strict_does_not(action, meta):
         "coordinate-double",
         "upload",
         "page-tool",
-        "message-edit",
-        "general-input",
         "general-check",
         "general-select",
-        "post-search",
-        "cross-origin-search",
-        "cross-port-search",
-        "effect-search",
         "implicit-effect-submitter",
         "submit-wins",
         "unknown-enter",
@@ -155,6 +143,24 @@ def test_balanced_allows_recognized_actions_and_strict_does_not(action, meta):
 )
 def test_balanced_keeps_approval_for_unclassified_or_effectful_actions(action, meta):
     assert decide("balanced", action, meta, PAGE)["approval_required"]
+
+
+@pytest.mark.parametrize(
+    "action,meta",
+    [
+        ({"type": "fill"}, {"tag": "textarea", "name": "Message", "editable": True}),
+        ({"type": "fill"}, {"tag": "input", "type": "text", "name": "Display name"}),
+        ({"type": "check"}, {"tag": "input", "type": "checkbox", "name": "Images only"}),
+        ({"type": "select"}, {"tag": "select", "name": "Category"}),
+        ({"type": "fill"}, SEARCH | {"form_method": "POST"}),
+        ({"type": "fill"}, SEARCH | {"form_action": "https://other.example/search"}),
+        ({"type": "fill"}, SEARCH | {"form_action": "https://example.com:444/search"}),
+        ({"type": "fill"}, SEARCH | {"form_action": "https://example.com/submit"}),
+    ],
+)
+def test_balanced_v2_edits_are_not_implicit_form_submission(action, meta):
+    assert not decide("balanced", action, meta, PAGE)["approval_required"]
+    assert decide("strict", action, meta, PAGE)["approval_required"]
 
 
 def test_operator_only_opt_in_and_reason_has_no_page_data(monkeypatch):
@@ -199,11 +205,13 @@ async def test_automatic_dispatch_is_not_retried_without_visible_change(cfg, unc
         first = await service.call("act", **action)
         assert first["status"] == ("error" if uncertain else "ok")
         second = await service.call("act", **action)
-        assert second["error"]["code"] == ("RESULT_UNCERTAIN" if uncertain else "ACTION_ALREADY_DISPATCHED")
+        assert second["error"]["code"] == (
+            "RESULT_UNCERTAIN" if uncertain else "ACTION_ALREADY_DISPATCHED"
+        )
         assert worker.executions == 1
         assert not service.pending
         status = await service.call("status")
-        assert status["capabilities"]["approval_policy"] == "balanced-v1"
+        assert status["capabilities"]["approval_policy"] == "balanced-v2"
     finally:
         await service.shutdown()
         store.close()

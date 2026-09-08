@@ -59,9 +59,9 @@ def test_same_origin_iframe_text_and_sensitive_child_guard(browser):
         "document.querySelector('iframe').contentDocument.body.innerHTML='<input type=password value=never-return-this>'"
     )
     for mode in ("semantic", "visual", "interactive"):
-        with pytest.raises(BrowserError) as exc:
-            adapter.observe(sid, tid, mode=mode)
-        assert exc.value.code == "AUTH_REQUIRED"
+        partial = adapter.observe(sid, tid, mode=mode)
+        assert "never-return-this" not in json.dumps(partial)
+        assert partial["observation"]["frames"][0]["reason"] == "SENSITIVE_FRAME"
 
 
 def test_authentication_only_verified_by_exact_operator_rule(browser):

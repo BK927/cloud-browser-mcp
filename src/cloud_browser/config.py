@@ -45,8 +45,9 @@ class Settings(BaseSettings):
     chromium_path: str = "/usr/bin/chromium"
     browser_proxy: str = "http://egress:3128"
     headless: bool = False
-    # Masking is opt-in and viewport-only; the default remains fail-closed.
-    iframe_screenshot_policy: Literal["block", "mask"] = "block"
+    # Inspect ordinary frames; mask sensitive/uninspectable regions. The legacy
+    # stronger block/all-mask operator choices remain available.
+    iframe_screenshot_policy: Literal["inspect", "block", "mask"] = "inspect"
     novnc_dir: Path = Path("/usr/share/novnc")
     vnc_websocket: str = "ws://127.0.0.1:6080/websockify"
     # Off by default: deploying the MCP never implicitly enables remote desktop.

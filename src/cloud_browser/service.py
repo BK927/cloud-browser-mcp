@@ -888,7 +888,7 @@ class BrowserService:
             "pagination": "revision-bound-complete-nodes",
             "approval_policy": "strict-per-action"
             if self.cfg.approval_policy == "strict"
-            else "balanced-v1",
+            else "balanced-v2",
             "iframe_screenshot_policy": self.cfg.iframe_screenshot_policy,
             "file_upload_automation": True,
             "file_upload_scope": "private-staged-files-only",
@@ -898,8 +898,9 @@ class BrowserService:
             "webmcp": self.cfg.webmcp_enabled,
             "webmcp_testing": self.cfg.webmcp_testing,
             "webmcp_runtime_check": "browser_list_page_tools",
-            "iframe_semantic_reading": "accessible-same-origin-only",
-            "iframe_automation": False,
+            "iframe_semantic_reading": "bounded-cdp-same-and-cross-origin",
+            "iframe_automation": True,
+            "frame_observation": "frame-ids-with-explicit-partial-results",
             "authentication_verification": bool(self.cfg.auth_rules),
             "authentication_verification_scope": "operator_rules",
         }

@@ -24,27 +24,8 @@
     [e.type, e.name, e.id, e.autocomplete, e.getAttribute('aria-label')].join(' '));
   const allInputs = [...document.querySelectorAll('input,textarea,[contenteditable=true]')];
   let protectedPage = allInputs.some(e => visible(e) && sensitive(e));
-  // Same-origin frame reading only; inaccessible frames remain opaque.
-  const frameTexts = [], frameDocuments = new Set([document]);
-  let frameIncomplete = false;
-  const readFrames = (doc, depth) => {
-    for (const frame of doc.querySelectorAll('iframe')) {
-      if (!visible(frame)) continue;
-      if (depth >= 3 || frameDocuments.size >= 8) { frameIncomplete = true; continue; }
-      let child;
-      try { child = frame.contentDocument; } catch (_) { continue; }
-      if (!child || frameDocuments.has(child) || !child.body) continue;
-      frameDocuments.add(child);
-      if ([...child.querySelectorAll('input,textarea,[contenteditable=true]')].some(e => visible(e) && sensitive(e))) {
-        protectedPage = true; continue;
-      }
-      const text = child.body.innerText || '';
-      if (text.length > 30000) frameIncomplete = true;
-      frameTexts.push('[iframe] ' + text.slice(0, 30000));
-      readFrames(child, depth + 1);
-    }
-  };
-  readFrames(document, 0);
+  // Child documents are inspected separately through their CDP contexts. Never
+  // read embedded credentials as part of their parent's text or AX snapshot.
   // Read native controls without constructing FormData (which fires page events).
   // Values are internal CDP data only; Python replaces them with a digest immediately.
   let formStateComplete = true, formChars = 0;
@@ -118,12 +99,19 @@
     // Ambiguous or overridden submission targets are not automatic search forms.
     const searchForm = !!form && form.elements.length <= 100 && submitters.length <= 1 && (
       form.getAttribute('role') === 'search' || !!form.closest('search') ||
-      [...form.elements].some(c => c.type === 'search' || c.getAttribute('role') === 'searchbox')
+      [...form.elements].some(c => c.type === 'search' || c.getAttribute('role') === 'searchbox' ||
+        (c.getAttribute('role') === 'combobox' && c.hasAttribute('aria-controls') && /search|검색|検索/i.test(accessibleName(c))) ||
+        (/^(q|query|search|search_query)$/.test(c.name || '') && /search|검색|検索/i.test(accessibleName(c)) &&
+          submitters.length === 1 && /search|검색|検索/i.test(accessibleName(submitters[0]))))
     ) && [...form.elements].every(c => !sensitive(c) &&
       !/csrf|token|auth|operation|command|action|method/i.test([c.name,c.id].join(' ')) &&
       !c.hasAttribute('formaction') && !c.hasAttribute('formmethod') &&
       !['password','file','email','tel','reset','image'].includes(c.type));
+    const searchContext = /search|검색|検索/i.test(accessibleName(e)) &&
+      (role === 'combobox' || role === 'searchbox' || e.type === 'search') &&
+      (!!e.closest('[role=search],search') || !!e.getAttribute('aria-controls') || role === 'searchbox' || e.type === 'search');
     return {tag: e.tagName.toLowerCase(), type: e.type || '', role: e.getAttribute('role'),
+      search_context: searchContext,
       view_control: viewControl, search_form: searchForm,
       search_submitter_name: searchForm && submitters.length ? accessibleName(submitters[0]) : null,
       download: e.hasAttribute('download'), link_ping: !!normalize(e.getAttribute('ping')),
@@ -169,7 +157,7 @@
     pieces.push(part); chars += part.length;
     if (part.length < text.length) textTruncated = true;
   };
-  const excluded = /^(SCRIPT|STYLE|TEMPLATE|NOSCRIPT|IFRAME|OBJECT|EMBED|SVG|CANVAS|VIDEO|INPUT|TEXTAREA|SELECT)$/;
+  const excluded = /^(SCRIPT|STYLE|TEMPLATE|NOSCRIPT|IFRAME|FRAME|OBJECT|EMBED|SVG|CANVAS|VIDEO|INPUT|TEXTAREA|SELECT)$/;
   const block = /^(P|DIV|SECTION|ARTICLE|MAIN|HEADER|FOOTER|ASIDE|NAV|UL|OL|LI|TABLE|TR|BLOCKQUOTE|PRE|DL|DT|DD|FIGURE|FIGCAPTION|FORM)$/;
   const walk = e => {
     if (!e || textTruncated) return;
@@ -197,10 +185,10 @@
     if (heading || block.test(e.tagName)) add('\n');
   };
   if (!protectedPage && !['interactive','visual'].includes(options.mode)) walk(root);
-  const semanticText = (pieces.join('') + (!protectedPage && frameTexts.length ? '\n' + frameTexts.join('\n') : ''))
+  const semanticText = pieces.join('')
     .replace(/[ \t]+\n/g, '\n').replace(/\n{3,}/g, '\n\n').trim();
 
-  const frames = [...document.querySelectorAll('iframe,object,embed')].filter(visible).map(e => {
+  const frames = [...document.querySelectorAll('iframe,frame,object,embed')].filter(visible).map(e => {
     const r = e.getBoundingClientRect();
     let safe = true;
     for (let parent = e; parent; parent = parent.parentElement) {
@@ -210,12 +198,14 @@
           (s.backdropFilter && s.backdropFilter !== 'none') ||
           (s.webkitBoxReflect && s.webkitBoxReflect !== 'none') || s.mixBlendMode !== 'normal') safe = false;
     }
-    return {x:r.x,y:r.y,width:r.width,height:r.height,mask_safe:safe};
+    return {x:r.x,y:r.y,width:r.width,height:r.height,mask_safe:safe,tag:e.tagName.toLowerCase()};
   });
   const bodyText = document.body?.innerText || '';
-  return {elements, data: {url: location.href, title: document.title,
+  const frameElements = document.querySelectorAll('iframe,frame');
+  return {elements, frame_elements:[...frameElements].slice(0,17), data: {url: location.href, title: document.title,
+    frame_count:frameElements.length,
     _form_states: formStates, _forms: ownForms, form_state_complete: formStateComplete,
-    readable_frames: frameDocuments.size - 1, frame_reading_truncated: frameIncomplete,
+    readable_frames: 0, frame_reading_truncated: false,
     text: protectedPage ? '' : bodyText.slice(0, 250000),
     semantic_text: semanticText, semantic_source: main ? main.tagName.toLowerCase() : 'body',
     semantic_source_truncated: textTruncated,
@@ -224,7 +214,7 @@
     scroll: {x:scrollX,y:scrollY}, height: document.documentElement.scrollHeight,
     challenge: /verify (that )?you are human|complete the captcha|prove you.re not a robot/i.test(bodyText) ? 'captcha' :
       (/automated queries|automated traffic|automation access.*blocked/i.test(bodyText) ? 'bot' : null),
-    has_iframe: !!document.querySelector('iframe,object,embed'), iframe_regions: frames,
+    has_iframe: !!document.querySelector('iframe,frame,object,embed'), iframe_regions: frames,
     has_canvas: !!document.querySelector('canvas,video'),
     interactive_truncated: all.length > elements.length,
     scroll_scan_truncated: candidates.length > scanBudget}};

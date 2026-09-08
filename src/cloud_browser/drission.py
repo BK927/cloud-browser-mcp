@@ -43,6 +43,12 @@ class TabState:
     document_key: str = ""
     revision_documents: dict = field(default_factory=dict)
     ax_cache: dict = field(default_factory=dict)
+    frame_id: str | None = None
+    parent_frame_id: str | None = None
+    frame_states: dict = field(default_factory=dict)
+    frame_nodes: dict = field(default_factory=dict)
+    frames_fingerprint: str = ""
+    frame_backend_ids: list = field(default_factory=list)
     options: dict = field(
         default_factory=lambda: {
             "viewport_width": 1024,
@@ -58,8 +64,10 @@ class DrissionAdapter:
     def __init__(self, settings: Settings):
         from DrissionPage import Chromium, ChromiumOptions
         from DrissionPage._elements.chromium_element import ChromiumElement
+        from DrissionPage._pages.chromium_frame import ChromiumFrame
 
         self.Chromium, self.Options, self.Element = Chromium, ChromiumOptions, ChromiumElement
+        self.Frame = ChromiumFrame
         self.cfg = settings
         self.sessions = {}
 
@@ -125,14 +133,36 @@ class DrissionAdapter:
     def _capture_state(self, state, *, mode="auto", lightweight=False):
         tab = state.tab
         tab.run_cdp("Runtime.releaseObjectGroup", objectGroup="cb-observation")
-        document = tab.run_cdp("Page.getFrameTree")["frameTree"]["frame"]
+        tree = tab.run_cdp("Page.getFrameTree")["frameTree"]
+        document = tree["frame"]
+        if state.frame_id:
+
+            def find_frame(branch):
+                if branch["frame"]["id"] == tab._frame_id:
+                    return branch["frame"]
+                return next(
+                    (
+                        found
+                        for child in branch.get("childFrames", [])
+                        if (found := find_frame(child))
+                    ),
+                    None,
+                )
+
+            document = find_frame(tree)
+            if not document:
+                raise BrowserError("FRAME_STALE", "Observed frame detached or moved")
         frame = document["id"]
         document_key = frame + ":" + document.get("loaderId", "")
         if document_key != state.document_key:
             state.nodes.clear()
             state.screenshot = None
             state.document_key = document_key
-        history = tab.run_cdp("Page.getNavigationHistory")
+            state.frame_states.clear()
+            state.frame_nodes.clear()
+        history = (
+            tab.run_cdp("Page.getNavigationHistory") if not state.frame_id else {"entries": []}
+        )
         if history["entries"]:
             entry = history["entries"][history["currentIndex"]]["id"]
             if document.get("loaderId") == state.document_loader and state.document_method:
@@ -183,7 +213,7 @@ class DrissionAdapter:
         elements = tab.run_cdp(
             "Runtime.callFunctionOn",
             objectId=oid,
-            functionDeclaration="function(){return this.elements}",
+            functionDeclaration="function(){return this.elements.concat(this.frame_elements || [])}",
             objectGroup="cb-observation",
         )["result"]["objectId"]
         props = tab.run_cdp("Runtime.getProperties", objectId=elements, ownProperties=True)[
@@ -197,6 +227,8 @@ class DrissionAdapter:
                         "backendNodeId"
                     ]
                 )
+        state.frame_backend_ids = backends[len(data["nodes"]) :]
+        backends = backends[: len(data["nodes"])]
         # Query only the observed elements, not unrelated frame trees or AX values.
         # Reuse computed names on unchanged DOM to bound repeated observation cost.
         dom_fingerprint = hashlib.sha256(
@@ -308,6 +340,209 @@ class DrissionAdapter:
             del state.revision_documents[next(iter(state.revision_documents))]
         state.data = data
         return data
+
+    def _capture_page(self, state, *, mode="auto", lightweight=False):
+        """Inspect bounded frame documents; collect no pixels or values from protected frames."""
+        data = self._capture_state(state, mode=mode, lightweight=lightweight)
+        state.frame_nodes = {}
+        inventory, texts, masks, visited = [], [], [], set()
+        root_regions = data["iframe_regions"]
+        frame_budget = 4 if lightweight else 16
+
+        def inspect(parent, parent_id, depth, ancestor_visible=True, root_region=None):
+            restricted = False
+            if not parent.data.get("has_iframe"):
+                return False
+            try:
+                children = parent.frame_backend_ids
+                remaining = max(0, frame_budget - len(visited))
+                if parent.data.get("frame_count", len(children)) > remaining:
+                    inventory.append(
+                        {
+                            "frame_id": None,
+                            "parent_frame_id": parent_id,
+                            "readable": False,
+                            "actionable": False,
+                            "reason": "FRAME_BUDGET",
+                        }
+                    )
+                    masks.extend([root_region] if root_region else root_regions)
+                    restricted = True
+                frames = []
+                for backend in children[:remaining]:
+                    frame_element = self.Element(parent.tab, backend_id=backend)
+                    frames.append(self.Frame(parent.tab, frame_element))
+            except Exception:
+                inventory.append(
+                    {
+                        "frame_id": None,
+                        "parent_frame_id": parent_id,
+                        "readable": False,
+                        "actionable": False,
+                        "reason": "FRAME_UNAVAILABLE",
+                    }
+                )
+                masks.extend([root_region] if root_region else root_regions)
+                return True
+            for frame in frames:
+                public_id = None
+                region = root_region
+                try:
+                    local_region = frame.frame_ele.run_js("""
+                            const r=this.getBoundingClientRect();let safe=true;
+                            for(let p=this;p;p=p.parentElement){const s=getComputedStyle(p);
+                              if(s.transform!=='none'||s.filter!=='none'||s.perspective!=='none'||
+                                (s.backdropFilter&&s.backdropFilter!=='none')||
+                                (s.webkitBoxReflect&&s.webkitBoxReflect!=='none')||s.mixBlendMode!=='normal')safe=false;}
+                            const s=getComputedStyle(this);
+                            return {x:r.x,y:r.y,width:r.width,height:r.height,mask_safe:safe,
+                              visible:r.width>0&&r.height>0&&s.visibility!=='hidden'&&s.visibility!=='collapse'&&s.display!=='none'};
+                        """)
+                    region = region or local_region
+                    visible = ancestor_visible and local_region["visible"]
+                    frame_key = (parent.document_key, frame._frame_id, frame._backend_id)
+                    public_id = next(
+                        (
+                            key
+                            for key, child in state.frame_states.items()
+                            if getattr(child, "frame_key", None) == frame_key
+                        ),
+                        None,
+                    )
+                    if not public_id:
+                        public_id = "frame_" + secrets.token_urlsafe(12)
+                        child = TabState(frame, frame_id=public_id, parent_frame_id=parent_id)
+                        child.frame_key = frame_key
+                        state.frame_states[public_id] = child
+                    child = state.frame_states[public_id]
+                    visited.add(public_id)
+                    entry = {
+                        "frame_id": public_id,
+                        "parent_frame_id": parent_id,
+                        "origin": None,
+                        "readable": False,
+                        "actionable": False,
+                        "reason": None,
+                    }
+                    inventory.append(entry)
+                    if not visible:
+                        entry["reason"] = "FRAME_NOT_VISIBLE"
+                        continue
+                    if len(visited) > frame_budget or depth > 4:
+                        entry["reason"] = "FRAME_BUDGET"
+                        restricted = True
+                        masks.append(region)
+                        continue
+                    self._capture_state(child, mode=mode, lightweight=lightweight)
+                    entry["origin"] = (
+                        origin(child.data["url"])
+                        if child.data["url"].startswith(("http://", "https://"))
+                        else None
+                    )
+                    sensitive = (
+                        child.data["protected"]
+                        or bool(TOKEN.search(child.data["text"]))
+                        or bool(child.data.get("challenge"))
+                    )
+                    if sensitive:
+                        entry["reason"] = "SENSITIVE_FRAME"
+                        restricted = True
+                        masks.append(region)
+                        continue
+                    entry.update(
+                        readable=True,
+                        actionable=visible,
+                        rect={k: region[k] for k in ("x", "y", "width", "height")},
+                    )
+                    if child.data["semantic_text"]:
+                        texts.append(f"[frame {public_id}]\n{child.data['semantic_text']}")
+                    for nid, target in child.nodes.items():
+                        if visible:
+                            state.frame_nodes[nid] = (child, target)
+                    if inspect(child, public_id, depth + 1, visible, region):
+                        restricted = True
+                except Exception:
+                    if public_id and inventory and inventory[-1].get("frame_id") == public_id:
+                        inventory[-1].update(
+                            readable=False, actionable=False, reason="FRAME_UNAVAILABLE"
+                        )
+                    else:
+                        inventory.append(
+                            {
+                                "frame_id": public_id,
+                                "parent_frame_id": parent_id,
+                                "readable": False,
+                                "actionable": False,
+                                "reason": "FRAME_UNAVAILABLE",
+                            }
+                        )
+                    restricted = True
+                    masks.extend([region] if region else root_regions)
+            return restricted
+
+        if data["has_iframe"] and not data["protected"]:
+            # Inspect each top-level frame independently. Unknown plugin embeds and
+            # frames beyond the budget remain masked. Never trust a page hint.
+            inspect(state, None, 1)
+            masks.extend(r for r in root_regions if r.get("tag") in ("object", "embed"))
+        state.frame_states = {
+            key: child for key, child in state.frame_states.items() if key in visited
+        }
+        frame_fp = hashlib.sha256(
+            json.dumps(
+                [
+                    (key, child.document_key, child.fingerprint)
+                    for key, child in state.frame_states.items()
+                ],
+                sort_keys=True,
+            ).encode()
+        ).hexdigest()
+        if state.frames_fingerprint and frame_fp != state.frames_fingerprint:
+            state.revision += 1
+            state.cursors.clear()
+        state.frames_fingerprint = frame_fp
+        state.revision_documents[state.revision] = state.document_key
+        data["frames"] = inventory
+        data["restricted_frame_regions"] = masks
+        data["readable_frames"] = sum(bool(f["readable"]) for f in inventory)
+        data["frame_reading_truncated"] = any(not f["readable"] for f in inventory)
+        if texts and mode in ("auto", "semantic"):
+            data["semantic_text"] = (data["semantic_text"] + "\n" + "\n".join(texts))[:250000]
+        return data
+
+    @staticmethod
+    def _node_target(state, node_id):
+        if node_id in state.nodes:
+            return state, state.nodes[node_id]
+        if node_id in state.frame_nodes:
+            return state.frame_nodes[node_id]
+        return state, None
+
+    def _frame_point(self, state, local_x, local_y):
+        """Project an observed child point through exact frame owners, checking occlusion."""
+        frame = state.tab
+        while state.frame_id and hasattr(frame, "frame_ele"):
+            owner = frame.frame_ele
+            result = owner.run_js(
+                """
+                const r=this.getBoundingClientRect();let safe=true;
+                for(let p=this;p;p=p.parentElement){const s=getComputedStyle(p);
+                  if(s.transform!=='none'||s.perspective!=='none'||s.zoom!=='1')safe=false;}
+                const x=r.x+this.clientLeft+arguments[0], y=r.y+this.clientTop+arguments[1];
+                const hit=document.elementFromPoint(x,y);
+                return {x,y,ok:this.isConnected && hit===this && safe};
+            """,
+                local_x,
+                local_y,
+            )
+            if not result["ok"]:
+                raise BrowserError(
+                    "NODE_NOT_ACTIONABLE",
+                    "Frame target is covered, transformed or outside the viewport",
+                )
+            local_x, local_y = result["x"], result["y"]
+            frame = frame._target_page
+        return local_x, local_y
 
     @staticmethod
     def _node_signature(meta):
@@ -588,7 +823,7 @@ class DrissionAdapter:
         lightweight=False,
     ):
         state = self._tab(session_id, tab_id)
-        data = self._capture_state(state, mode=mode, lightweight=lightweight)
+        data = self._capture_page(state, mode=mode, lightweight=lightweight)
         self._guard_page(data)
         if cursor:
             saved = state.cursors.get(cursor)
@@ -600,7 +835,11 @@ class DrissionAdapter:
             budget = max_chars or state.options["max_chars"]
             interactive = []
             if mode in ("auto", "interactive"):
-                for nid, (_, meta) in state.nodes.items():
+                combined = list(state.nodes.items()) + [
+                    (nid, (target[0], target[1] | {"frame_id": child.frame_id}))
+                    for nid, (child, target) in state.frame_nodes.items()
+                ]
+                for nid, (_, meta) in combined:
                     clean = {
                         k: redact_tree(v)
                         for k, v in meta.items()
@@ -617,6 +856,8 @@ class DrissionAdapter:
                     }
                     if meta["href"]:
                         clean["href"] = safe_url(meta["href"])
+                    if meta.get("frame_id"):
+                        clean["rect_coordinate_space"] = "frame viewport CSS pixels"
                     interactive.append(compact_node({"node_id": nid, **clean}))
             snapshot = {
                 "semantic": redact(data["semantic_text"]) if mode in ("auto", "semantic") else "",
@@ -634,6 +875,7 @@ class DrissionAdapter:
             scroll_scan_truncated=data["scroll_scan_truncated"],
             readable_frames=data["readable_frames"],
             frame_reading_truncated=data["frame_reading_truncated"],
+            frames=data["frames"],
         )
         if obs["truncated"]:
             next_cursor = "cursor_" + secrets.token_urlsafe(16)
@@ -651,7 +893,7 @@ class DrissionAdapter:
         extra = {}
         if not cursor and (mode == "visual" or (mode == "auto" and data["has_canvas"])):
             if TOKEN.search(data["text"]) or (
-                data["has_iframe"] and (self.cfg.iframe_screenshot_policy == "block" or full_page)
+                data["has_iframe"] and self.cfg.iframe_screenshot_policy == "block"
             ):
                 raise BrowserError(
                     "SENSITIVE_SCREEN",
@@ -670,6 +912,10 @@ class DrissionAdapter:
                 if full_page
                 else {}
             )
+            observed_targets = {
+                nid: [bid, self._node_signature(meta), meta["rect"]]
+                for nid, (bid, meta) in state.nodes.items()
+            }
             image = state.tab.run_cdp(
                 "Page.captureScreenshot",
                 format="jpeg",
@@ -677,15 +923,41 @@ class DrissionAdapter:
                 captureBeyondViewport=full_page,
                 **capture,
             )["data"]
-            previous = state.fingerprint
-            self._capture_state(state)
-            if state.fingerprint != previous:
-                raise BrowserError("SCREEN_CHANGED", "Page changed during capture; observe again")
+            capture_geometry = [
+                state.document_key,
+                data["viewport"],
+                data["scroll"],
+                data["iframe_regions"],
+            ]
+            after = self._capture_page(state, mode="visual", lightweight=lightweight)
+            self._guard_page(after)
+            if capture_geometry != [
+                state.document_key,
+                after["viewport"],
+                after["scroll"],
+                after["iframe_regions"],
+            ] or TOKEN.search(after["text"]):
+                raise BrowserError(
+                    "SCREEN_CHANGED",
+                    "Capture geometry or privacy changed during capture; observe again",
+                )
             raw_digest = hashlib.sha256(base64.b64decode(image)).hexdigest()
             masked_regions = []
             mime_type = "image/jpeg"
-            if data["has_iframe"]:
-                image, masked_regions = mask_frames(image, data["iframe_regions"], data["viewport"])
+            regions = (
+                data["iframe_regions"]
+                if self.cfg.iframe_screenshot_policy == "mask"
+                else data["restricted_frame_regions"] + after["restricted_frame_regions"]
+            )
+            if regions:
+                if full_page:
+                    regions = [
+                        r | {"x": r["x"] + data["scroll"]["x"], "y": r["y"] + data["scroll"]["y"]}
+                        for r in regions
+                    ]
+                image, masked_regions = mask_frames(
+                    image, regions, {"width": width, "height": height}
+                )
                 mime_type = "image/png"
             screenshot_id = "screen_" + secrets.token_urlsafe(16)
             state.screenshot = {
@@ -694,6 +966,9 @@ class DrissionAdapter:
                 "full_page": full_page,
                 "digest": raw_digest,
                 "masked_regions": masked_regions,
+                "document_key": state.document_key,
+                "geometry": [data["viewport"], data["scroll"]],
+                "targets": observed_targets,
             }
             obs["screenshot"] = {
                 "screenshot_id": screenshot_id,
@@ -702,6 +977,7 @@ class DrissionAdapter:
                 "coordinate_units": "CSS pixels",
                 "full_page": full_page,
                 "masked_regions": masked_regions,
+                "captured_at": time.time(),
             }
             extra["_image"] = {"data": image, "mimeType": mime_type}
         notices = []
@@ -709,15 +985,15 @@ class DrissionAdapter:
             notices.append(
                 "Chromium accessibility information unavailable; rendered DOM fallback used"
             )
-        if data["has_iframe"]:
+        if data["frame_reading_truncated"]:
             notices.append(
-                "Only accessible same-origin iframe text is included; iframe actions require manual control"
+                "Partial frame observation: inspect frames[].reason; unavailable or sensitive regions are withheld"
             )
         return self._result(session_id, tab_id, observation=obs, notices=notices, **extra)
 
     def prepare(self, session_id, tab_id, expected_revision, action):
         state = self._tab(session_id, tab_id)
-        data = self._capture_state(state)
+        data = self._capture_page(state)
         self._guard_page(data)
         if not data["form_state_complete"]:
             raise BrowserError(
@@ -754,14 +1030,22 @@ class DrissionAdapter:
             )
         nid = action.get("node_id")
         meta = None
+        target_state = state
         if nid:
-            target = state.nodes.get(nid)
+            target_state, target = self._node_target(state, nid)
             if target is None:
                 raise BrowserError(
                     "STALE_NODE", "Observed target changed or was replaced; observe again"
                 )
             bid, meta = target
-            element = self.Element(state.tab, backend_id=bid)
+            self._guard_page(target_state.data)
+            if not target_state.data["form_state_complete"]:
+                raise BrowserError(
+                    "UNSUPPORTED_OPERATION",
+                    "Target frame form exceeds the verification budget; use manual control",
+                    "user_action_required",
+                )
+            element = self.Element(target_state.tab, backend_id=bid)
             if not element.run_js("return this.isConnected"):
                 raise BrowserError("STALE_NODE", "Observed element was detached")
             if meta["type"] == "file" and action["type"] != "upload":
@@ -819,7 +1103,8 @@ class DrissionAdapter:
             if (
                 not shot
                 or shot["id"] != action["screenshot_id"]
-                or shot["revision"] != state.revision
+                or shot.get("document_key") != state.document_key
+                or shot.get("geometry") != [data["viewport"], data["scroll"]]
                 or shot["full_page"]
             ):
                 raise BrowserError("STALE_SCREENSHOT", "A current viewport screenshot is required")
@@ -840,26 +1125,55 @@ class DrissionAdapter:
                         "Cannot act on masked embedded content; use handoff",
                         "blocked",
                     )
-            image = state.tab.run_cdp(
-                "Page.captureScreenshot",
-                format="jpeg",
-                quality=state.options["screenshot_quality"],
-                captureBeyondViewport=False,
-            )["data"]
-            if hashlib.sha256(base64.b64decode(image)).hexdigest() != shot["digest"]:
-                state.screenshot = None
-                raise BrowserError("STALE_SCREENSHOT", "Pixels changed since the screenshot")
+            resolved = []
             if action["type"] in ("click_at", "double_click_at"):
-                for _, (_, candidate) in state.nodes.items():
+                for candidate_id, (backend, candidate) in state.nodes.items():
                     rect = candidate["rect"]
                     if (
                         rect["x"] <= action["x"] < rect["x"] + rect["width"]
                         and rect["y"] <= action["y"] < rect["y"] + rect["height"]
                     ):
-                        raise BrowserError(
-                            "DOM_TARGET_AVAILABLE",
-                            "Use the observed node_id for this interactive element instead of coordinates",
-                        )
+                        candidate_element = self.Element(state.tab, backend_id=backend)
+                        if candidate_element.run_js(
+                            "const hit=document.elementFromPoint(arguments[0],arguments[1]);return this.isConnected&&(hit===this||this.contains(hit))",
+                            action["x"],
+                            action["y"],
+                        ):
+                            resolved.append((candidate_id, backend, candidate))
+            if len(resolved) > 1:
+                raise BrowserError(
+                    "NODE_AMBIGUOUS",
+                    "Coordinate hits nested interactive targets; use an observed node_id",
+                )
+            if resolved:
+                nid, backend, meta = resolved[0]
+                if shot["targets"].get(nid) != [backend, self._node_signature(meta), meta["rect"]]:
+                    raise BrowserError(
+                        "STALE_SCREENSHOT", "Coordinate target changed since capture"
+                    )
+                if meta["disabled"] or meta["type"] == "file":
+                    raise BrowserError(
+                        "NODE_NOT_ACTIONABLE",
+                        "Coordinate target is disabled or requires staged upload",
+                    )
+                # Classify the same actual element exactly as a node-based action.
+                action = action | {
+                    "type": "double_click" if action["type"] == "double_click_at" else "click"
+                }
+            else:
+                # Canvas/unknown targets have no semantic identity to validate.
+                # Keep the stricter pixel proof for this fallback only.
+                image = state.tab.run_cdp(
+                    "Page.captureScreenshot",
+                    format="jpeg",
+                    quality=state.options["screenshot_quality"],
+                    captureBeyondViewport=False,
+                )["data"]
+                if hashlib.sha256(base64.b64decode(image)).hexdigest() != shot["digest"]:
+                    state.screenshot = None
+                    raise BrowserError(
+                        "STALE_SCREENSHOT", "Unidentified target pixels changed since capture"
+                    )
         destination = None
         destination_kind = "unknown"
         if meta and action["type"] in ("click", "double_click") and meta.get("href"):
@@ -892,11 +1206,13 @@ class DrissionAdapter:
             ],
             requires_confirmation=policy["approval_required"],
             action_policy=policy,
+            resolved_node_id=nid,
             target_binding=hashlib.sha256(
                 json.dumps(
                     [
                         state.document_key,
                         state.tab.url,
+                        target_state.document_key,
                         nid,
                         self._node_signature(meta) if meta else data["viewport"],
                     ],
@@ -909,10 +1225,11 @@ class DrissionAdapter:
         self.prepare(session_id, tab_id, expected_revision, action)
         state = self._tab(session_id, tab_id)
         before_url, before_fp = state.tab.url, state.fingerprint
+        before_frames = state.frames_fingerprint
         old_tabs = set(self._session(session_id)["tabs"])
         typ = action["type"]
-        target = state.nodes.get(action.get("node_id"))
-        element = self.Element(state.tab, backend_id=target[0]) if target else None
+        target_state, target = self._node_target(state, action.get("node_id"))
+        element = self.Element(target_state.tab, backend_id=target[0]) if target else None
         performed = True
         dispatched = False
         tool_result = None
@@ -931,6 +1248,7 @@ class DrissionAdapter:
                 raise BrowserError(
                     "NODE_NOT_ACTIONABLE", "Observed element is covered or outside the viewport"
                 )
+            x, y = self._frame_point(target_state, x, y)
             for count in range(1, click_count + 1):
                 dispatched = True
                 state.tab.run_cdp(
@@ -953,7 +1271,7 @@ class DrissionAdapter:
         def focus_exact():
             nonlocal dispatched
             dispatched = True
-            state.tab.run_cdp("DOM.focus", backendNodeId=target[0])
+            target_state.tab.run_cdp("DOM.focus", backendNodeId=target[0])
             if not element.run_js(
                 "return document.activeElement===this || this.contains(document.activeElement)"
             ):
@@ -984,7 +1302,7 @@ class DrissionAdapter:
                 native_click(2 if typ == "double_click" else 1)
             elif typ == "upload":
                 dispatched = True
-                state.tab.run_cdp(
+                target_state.tab.run_cdp(
                     "DOM.setFileInputFiles",
                     backendNodeId=target[0],
                     files=[item["path"] for item in action["_uploads"]],
@@ -1070,7 +1388,7 @@ class DrissionAdapter:
                 raise BrowserError("UNSUPPORTED_OPERATION", "Action is not implemented")
             time.sleep(state.options["wait_ms"] / 1000)
             self._sync(session_id)
-            self._capture_state(state)
+            self._capture_page(state)
         except BrowserError as exc:
             if dispatched:
                 raise BrowserError(
@@ -1082,7 +1400,7 @@ class DrissionAdapter:
             raise BrowserError(
                 "RESULT_UNCERTAIN", "Action may have been dispatched; do not repeat automatically"
             ) from exc
-        changed = before_fp != state.fingerprint
+        changed = before_fp != state.fingerprint or before_frames != state.frames_fingerprint
         added = list(set(self._session(session_id)["tabs"]) - old_tabs)
         return self._result(
             session_id,

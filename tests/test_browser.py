@@ -184,19 +184,15 @@ def test_real_coordinate_prefers_dom_and_pixel_probe(browser):
     shot = adapter.observe(sid, tid, mode="visual")
     _, target = node(adapter, sid, tid, "Personal Information")
     rect = target["rect"]
-    with pytest.raises(BrowserError) as exc:
-        adapter.prepare(
-            sid,
-            tid,
-            shot["revision"],
-            {
-                "type": "click_at",
-                "x": int(rect["x"] + rect["width"] / 2),
-                "y": int(rect["y"] + rect["height"] / 2),
-                "screenshot_id": shot["observation"]["screenshot"]["screenshot_id"],
-            },
-        )
-    assert exc.value.code == "DOM_TARGET_AVAILABLE"
+    prepared = adapter.prepare(
+        sid, tid, shot["revision"], {
+            "type": "click_at", "x": int(rect["x"] + rect["width"] / 2),
+            "y": int(rect["y"] + rect["height"] / 2),
+            "screenshot_id": shot["observation"]["screenshot"]["screenshot_id"],
+        },
+    )
+    assert prepared["resolved_node_id"] == target["node_id"]
+    assert prepared["requires_confirmation"]  # strict still applies to coordinates
     adapter.navigate(sid, tid, "goto", base + "/visual-probe.html")
     assert not adapter._tab(sid, tid).data["text"]
     shot = adapter.observe(sid, tid, mode="visual")

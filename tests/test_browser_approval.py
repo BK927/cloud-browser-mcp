@@ -91,9 +91,9 @@ async def test_real_link_automatic_general_edits_and_effects_still_gated(balance
         ("Save profile", {"type": "click"}),
     ):
         result = await service.call("act", **args_for(adapter, sid, tid, name, **action))
-        assert result["status"] == "confirmation_required"
+        assert result["status"] == ("ok" if action["type"] == "fill" else "confirmation_required")
     assert adapter._tab(sid, tid).tab.run_js("return window.writes") == 0
-    assert adapter._tab(sid, tid).tab.run_js("return document.querySelector('#draft').value") == ""
+    assert adapter._tab(sid, tid).tab.run_js("return document.querySelector('#draft').value") == "Do not send"
     result = await service.call("act", **args_for(adapter, sid, tid, "Documentation"))
     assert result["status"] == "ok" and result["action_policy"]["reason"] == "http_navigation"
     assert adapter._tab(sid, tid).tab.url.endswith("/browser.html")

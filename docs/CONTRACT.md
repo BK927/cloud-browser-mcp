@@ -109,7 +109,7 @@ NODE_AMBIGUOUS입니다. readonly 입력·radio 직접 해제·multi-select는 �
 
 일반 overflow 스크롤 영역에도 node_id와 scrollable/scroll 정보를 부여합니다. 후보 탐색은
 30000개 요소로 제한하고 초과하면 `scroll_scan_truncated=true`입니다. 영역 내부 스크롤도
-revision에 반영합니다. 이 지원은 Shadow DOM 또는 iframe 내부 자동화를 뜻하지 않습니다.
+revision에 반영합니다. Shadow DOM의 완전한 탐색은 아직 보장하지 않습니다.
 
 max_chars는 두 snapshot 문자열의 합산 예산입니다. auto는 조작 목록에 예산을 먼저
 확보하므로 긴 본문 때문에 버튼이 전부 밀려나지 않습니다. 각 interactive 행은 독립적으로
@@ -119,7 +119,14 @@ JSON 파싱할 수 있습니다. 너무 긴 행은 설명 일부를 생략하고
 
 cursor는 고정 snapshot·두 문자열의 위치·mode·예산·revision에 묶입니다. 같은 cursor를
 반복하면 같은 내용이며 페이지가 바뀌면 `CURSOR_STALE`입니다. cursor 호출에서는 처음의
-mode/예산을 유지하고 이미지는 다시 생성하지 않습니다. iframe 자동 조작은 미지원입니다.
+mode/예산을 유지하고 이미지는 다시 생성하지 않습니다.
+
+`frames`는 불투명 frame_id, parent_frame_id, origin, readable/actionable, 제한 reason을
+반환합니다. CDP로 연결 가능한 동일·교차 출처 iframe, frame/frameset과 중첩 프레임을
+최대 16개·깊이 4(압박 모드 최대 4개)까지 검사합니다. 내부 노드도 실제 backend에
+연결하며 frame_id가 있는 노드의 rect는 해당 프레임 viewport CSS 좌표입니다.
+노드 조작은 부모 프레임 경계를 투영하고 가림을 검사합니다. 프레임 교체·이동·분리 시
+이전 노드는 재검색하지 않습니다. 읽지 못한 프레임은 부분 결과와 이유를 반환합니다.
 
 URL은 최종 목적지를 사용하되 userinfo/query 값/fragment를 마스킹합니다. 원문 URL이
 그대로 필요하다는 이유로 비밀 query를 반환하지 않습니다. 이 마스킹 때문에 `page.url`은
@@ -129,8 +136,9 @@ URL은 최종 목적지를 사용하되 userinfo/query 값/fragment를 마스킹
 
 기본 `CB_APPROVAL_POLICY=strict`에서는 모든 클릭/입력/키/select/check가
 confirmation_required입니다. 운영자 선택 `balanced`에서는 일반 HTTP(S) 링크,
-식별된 펼침/접기·탭, 검색 입력·GET 검색 폼 조작, Tab/Escape를 자동 허용합니다.
-좌표 클릭·일반 폼 편집·제출·업로드·페이지 도구·불명확한 행동은 계속 승인 대상입니다.
+식별된 펼침/접기·탭, 일반 비민감 입력·선택·체크·편집 키, 구조화 검색과 GET 검색,
+Tab/Escape를 자동 허용합니다. 실제 전송·구매·삭제·권한 변경·업로드·불명확한 실행은
+계속 승인 대상입니다. 좌표가 관찰한 DOM 대상과 일치하면 같은 요소 정책을 적용합니다.
 자동 허용 및 승인 응답에는 `action_policy`의 모드·판정 이유가 포함됩니다.
 세부 범위와 스크립트 부작용의 한계는 [승인 정책](APPROVAL_POLICY.md)을 참고하세요. 콘솔의
 승인 기록 없이 token만 재전달하면 미실행입니다. 승인과 현재 페이지가 다르면
@@ -139,7 +147,8 @@ CONFIRMATION_STALE. 소비한 토큰은 CONFIRMATION_USED. 거절한 토큰은 C
 수동 확인 전까지 차단합니다. `balanced`는 알려진 외부 변경을 허용하는 모드가 아니며,
 페이지 JavaScript의 부작용을 완벽히 증명하는 보안 경계도 아닙니다.
 
-동일 세션·탭·revision·행동의 미완료 승인 요청은 하나로 합칩니다. 실행 전 해당 결합의 소비
+동일 문서·프레임·대상·행동·전송 데이터의 미완료 승인 요청은 하나로 합칩니다.
+무관한 페이지 갱신은 허용하되 대상·폼·경로가 달라지면 승인을 폐기합니다. 실행 전 결합의 소비
 기록도 저장하므로 화면 변화가 없더라도 토큰을 빼고 재호출해 중복 실행할 수 없습니다.
 의도적인 같은 행동의 반복도 새 페이지 상태 또는 수동 확인이 필요합니다. 결과 불명 상태에서는
 navigate와 URL을 포함한 open도 차단합니다. 관찰·상태 조회·탭 정리·수동 제어는 가능합니다.
@@ -183,11 +192,12 @@ WebMCP, passkey 전달, 인증 검증 지원 여부를 표시합니다. 지원 �
   timeout에서도 이전 노드·좌표·cursor는 폐기합니다. 단순히 이전 문서가 보이는 것은 성공이 아닙니다.
 - 외부 변경 여부가 불명확한 행동은 승인 대상이지만 범용 부작용 분석기는 아닙니다.
 - 파일 입력과 WebMCP는 [확장 계약](CONTRACT_EXTENSIONS.md)의 제한·승인 절차를 따릅니다.
-  iframe 내부 자동 조작과 passkey/보안 키 전달은 제공하지 않습니다.
-- 인증/알려진 token 화면은 이미지 반환을 거부합니다. iframe 화면도 기본적으로 차단합니다.
-- 운영자 설정 `CB_IFRAME_SCREENSHOT_POLICY=mask`는 viewport 캡처에서만 iframe/object/embed
-  영역을 여백 포함 검게 가린 PNG를 허용합니다. 좌표가 불명확하거나 transform/filter 등 지원하지
-  않는 합성이 있으면 전체 차단하며, full_page도 차단합니다. 가린 영역의 좌표 조작은 거부합니다.
+  passkey/보안 키 전달은 제공하지 않습니다.
+- 인증/알려진 token 화면은 이미지 반환을 거부합니다. 기본 `CB_IFRAME_SCREENSHOT_POLICY=inspect`는
+  검사 가능한 일반 프레임을 표시하고 민감·검사 불가 영역만 마스킹합니다.
+- 운영자 설정 `mask`는 모든 iframe/object/embed 영역을, `block`은 전체 프레임 캡처를
+  차단합니다. 마스킹 위치에 transform/filter 등 지원하지 않는 합성이 있으면 캡처를
+  거절합니다. 안전하게 위치를 확인한 full_page 마스킹은 허용하며 가린 영역 조작은 거부합니다.
   일반 캡처는 JPEG이고, 마스킹은 시각 정보를 제거하는 제한적 선택 기능이지 임의 비밀값 탐지나
   사이트 스크립트의 정보 유출 방지를 보장하지 않습니다. MCP configure로 정책을 완화할 수 없습니다.
 - CAPTCHA/BOT 차단은 명확한 화면 문구를 증거로 구분합니다. 단순 HTTP 403/429나
@@ -201,8 +211,9 @@ OBSERVATION_FAILED, UNSUPPORTED_OPERATION, ENGINE_UNAVAILABLE, RESOURCE_PRESSURE
 BROWSER_ERROR, CONFIRMATION_USED, CONFIRMATION_DENIED, AUTH_IN_PROGRESS, AUTH_ORIGIN_MISMATCH,
 USER_CONTROL_ACTIVE, HANDOFF_UNAVAILABLE, HANDOFF_NOT_FOUND를 사용합니다.
 CONTROL_DISCONNECT_FAILED는 원격 제어 연결을 안전하게 끊지 못한 경우입니다.
-관찰된 DOM 요소에 좌표 클릭을 시도하면 DOM_TARGET_AVAILABLE로 거부하고 node_id 사용을
-요청합니다.
+좌표는 문서·viewport·스크롤·적중 요소·가림·의미를 재검증합니다. DOM 대상이 없으면
+엄격한 픽셀 일치 검사를 유지합니다. 일반 이미지 관찰은 동영상 픽셀 변화만으로 실패하지
+않으며 `captured_at`을 반환합니다. 가능한 경우 항상 node_id 조작을 우선합니다.
 모두 실패를 성공처럼 숨기는 대신 나타내는 확장입니다.
 
 0.3의 폼 값 결합, iframe 의미 읽기, 인증 규칙·실패 보고, 업로드·WebMCP 계약은

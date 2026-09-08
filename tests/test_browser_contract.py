@@ -22,7 +22,9 @@ def test_real_main_first_no_duplicate_text_and_complete_cursor_rows(browser):
             '<p>Useful paragraph with meaningful information.</p>'.repeat(80) +
             '</main><footer>NOISY FOOTER</footer>';
     """)
-    full = adapter.observe(sid, tid, mode="semantic", max_chars=100000)["observation"]["semantic_snapshot"]
+    full = adapter.observe(sid, tid, mode="semantic", max_chars=100000)["observation"][
+        "semantic_snapshot"
+    ]
     assert full.startswith("# Main story")
     assert full.count("Unique introduction sentence.") == 1
     assert "NOISY" not in full and "StaticText" not in full
@@ -48,7 +50,9 @@ def test_real_main_first_no_duplicate_text_and_complete_cursor_rows(browser):
     assert "".join(text) == full
     assert len(nodes) == len(set(nodes))
     repeated = adapter.observe(sid, tid, cursor=seen_cursor)
-    assert repeated["observation"]["semantic_snapshot"] == current["observation"]["semantic_snapshot"]
+    assert (
+        repeated["observation"]["semantic_snapshot"] == current["observation"]["semantic_snapshot"]
+    )
 
 
 def test_real_declared_link_and_form_destinations_are_separate_and_redacted(browser):
@@ -59,11 +63,15 @@ def test_real_declared_link_and_form_destinations_are_separate_and_redacted(brow
             '<input aria-label="Text"><button type="submit">Publish</button></form>';
     """)
     obs, link = node(adapter, sid, tid, "Learn more")
-    result = adapter.prepare(sid, tid, obs["revision"], {"type": "click", "node_id": link["node_id"]})
+    result = adapter.prepare(
+        sid, tid, obs["revision"], {"type": "click", "node_id": link["node_id"]}
+    )
     assert result["destination"] == "https://iana.org/domains/example"
     assert result["destination"] != result["page"]["url"]
     obs, button = node(adapter, sid, tid, "Publish")
-    result = adapter.prepare(sid, tid, obs["revision"], {"type": "click", "node_id": button["node_id"]})
+    result = adapter.prepare(
+        sid, tid, obs["revision"], {"type": "click", "node_id": button["node_id"]}
+    )
     assert result["destination_kind"] == "declared_form"
     assert "private-value" not in json.dumps(result)
     assert "private-value" not in json.dumps(obs)
@@ -72,6 +80,7 @@ def test_real_declared_link_and_form_destinations_are_separate_and_redacted(brow
 
 def test_real_iframe_masking_is_opt_in_and_masked_coordinates_are_blocked(browser):
     adapter, sid, tid, _ = browser
+    adapter.cfg.iframe_screenshot_policy = "block"
     adapter._tab(sid, tid).tab.run_js("""
         document.body.insertAdjacentHTML('beforeend',
             '<div style="position:fixed;left:0;top:0;width:30px;height:30px;background:lime;z-index:10"></div>' +
@@ -90,14 +99,23 @@ def test_real_iframe_masking_is_opt_in_and_masked_coordinates_are_blocked(browse
     assert image.getpixel((10, 10))[1] > 200
     assert shot["observation"]["screenshot"]["masked_regions"]
     with pytest.raises(BrowserError) as exc:
-        adapter.prepare(sid, tid, shot["revision"], {
-            "type": "click_at", "x": 700, "y": 60,
-            "screenshot_id": shot["observation"]["screenshot"]["screenshot_id"],
-        })
+        adapter.prepare(
+            sid,
+            tid,
+            shot["revision"],
+            {
+                "type": "click_at",
+                "x": 700,
+                "y": 60,
+                "screenshot_id": shot["observation"]["screenshot"]["screenshot_id"],
+            },
+        )
     assert exc.value.code == "SENSITIVE_SCREEN"
-    with pytest.raises(BrowserError):
-        adapter.observe(sid, tid, mode="visual", full_page=True)
-    adapter._tab(sid, tid).tab.run_js("document.querySelector('iframe').style.transform='rotate(5deg)'")
+    full = adapter.observe(sid, tid, mode="visual", full_page=True)
+    assert full["observation"]["screenshot"]["masked_regions"]
+    adapter._tab(sid, tid).tab.run_js(
+        "document.querySelector('iframe').style.transform='rotate(5deg)'"
+    )
     with pytest.raises(BrowserError) as exc:
         adapter.observe(sid, tid, mode="visual")
     assert exc.value.code == "SENSITIVE_SCREEN"
@@ -111,7 +129,9 @@ def test_real_aria_disabled_and_native_details(browser):
     """)
     obs, disabled = node(adapter, sid, tid, "Disabled action")
     with pytest.raises(BrowserError) as exc:
-        adapter.prepare(sid, tid, obs["revision"], {"type": "click", "node_id": disabled["node_id"]})
+        adapter.prepare(
+            sid, tid, obs["revision"], {"type": "click", "node_id": disabled["node_id"]}
+        )
     assert exc.value.code == "NODE_NOT_ACTIONABLE"
     obs, summary = node(adapter, sid, tid, "Read details")
     assert summary["expanded"] == "true"

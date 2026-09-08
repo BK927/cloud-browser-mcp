@@ -14,16 +14,17 @@ allow rules are not a complete multilingual side-effect classifier. Use strict
 mode when this remaining risk is unacceptable. The client must still follow the
 user's actual task and ignore instructions injected by page content.
 
-## Current balanced-v1 behavior
+## Current balanced-v2 behavior
 
 | Action | Automatic only when… |
 | --- | --- |
 | Click/double-click or Enter/Space activation of a link | Native anchor with an ordinary HTTP(S) href, no download/ping attribute, no recognized effect indicator |
 | Expand/collapse | A native details/summary, or an expanded-state control referencing existing non-input content through aria-controls; it must not submit a form |
 | Select a view tab | A non-submitting role=tab control referencing existing role=tabpanel content |
-| Type/edit a search query | A native search/searchbox input outside a form, or an eligible input in a recognized same-origin GET search form |
-| Select/check search filters | The control belongs to a recognized same-origin GET search form |
+| Ordinary text editing | Non-sensitive editable text controls, including drafts and fields in POST forms; filling is not classified as submitting |
+| Select/check | Native controls without recognized sensitive, permission or effect indicators |
 | Submit a search with its button or Enter | A recognized same-origin GET search form, not a general or POST form |
+| JavaScript search with Enter | A named search control with a searchbox/search type or combobox and connected search structure; no unknown form submission override |
 | Tab / Escape | Existing valid non-protected target; no special exemption for other keys |
 | Scroll / pointer movement | Existing geometry/identity checks pass, as in strict mode |
 
@@ -37,12 +38,18 @@ A field merely labelled “Search” or a button merely labelled
 “Safe” is not an allow rule. A control merely having aria-expanded without a valid
 controlled content target is not enough either.
 
-Approval is retained for **general text fields, draft editors, ordinary checkbox/
-select settings, general/POST form submissions, save/send/publish/purchase/delete/
-permission operations, downloads/uploads, coordinate clicks, all page-provided
+Approval is retained for **general/POST form submissions, save/send/publish/purchase/delete/
+permission operations, downloads/uploads, unidentified coordinate clicks, page-provided
 tool calls, and unclassified buttons/keys**. Known effect indicators override
 otherwise recognized view/link/search actions. Deny-word matching can have false
 positives and false negatives; it is an extra brake, not the security boundary.
+
+Ordinary edits can trigger autosave or page JavaScript. Balanced-v2 deliberately
+accepts that usability tradeoff; it does not prove that a select or text edit has
+no server-side effect. Use strict mode if such sites must remain per-action gated.
+Coordinate clicks on an identified, unchanged observed DOM element use the same
+policy as that element, not an approval bypass. Unknown canvas targets retain
+both private approval and stricter screenshot checks.
 
 Ordinary URLs, tabs, navigation history, observations and viewport/capture settings
 continue to use their existing tool rules without console approval. This does not
@@ -60,13 +67,13 @@ restriction was removed.
   controls and unsupported operations remain rejected before dispatch.
 - Actions still recheck actual state just before execution and inspect the result.
 - For approval-required actions, only an actual private-console approval record
-  authorizes the exact session/tab/revision/action token, consumed before dispatch.
+  authorizes the exact session/tab/document/target/action/data token, consumed before dispatch.
 - Automatic non-passive actions now also record their exact dispatch binding.
   Repeating an identical action/revision after no visible change or a lost result
   must not execute again. RESULT_UNCERTAIN still locks subsequent actions until
   manual reconciliation. This is not a network-level idempotency guarantee.
 
-`browser_status.capabilities.approval_policy` is `strict-per-action` or `balanced-v1`.
+`browser_status.capabilities.approval_policy` is `strict-per-action` or `balanced-v2`.
 Successful actions and approval proposals include `action_policy` with `mode`,
 `approval_required` and a bounded `reason` code. These results contain no extra
 input values, page text or credentials. The MCP tool registry and annotations

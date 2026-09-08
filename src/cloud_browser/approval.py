@@ -1,7 +1,8 @@
 """Operator-selected approval policy, not a proof that page JavaScript is harmless.
 
 Balanced mode permits a small set of observed navigation/view/search operations.
-Everything unrecognized stays approval-gated. Page labels cannot grant approval.
+Ordinary non-sensitive edits are automatic in balanced-v2. Execution buttons
+with unclassified effects stay approval-gated. This is not a JS effect proof.
 """
 
 import re
@@ -20,6 +21,10 @@ _EFFECT = re.compile(
 _FOCUS_KEYS = frozenset({"TAB", "ESCAPE"})
 _EDIT_KEYS = frozenset(
     {"ARROWUP", "ARROWDOWN", "ARROWLEFT", "ARROWRIGHT", "HOME", "END", "BACKSPACE", "DELETE"}
+)
+_PRIVILEGED = re.compile(
+    r"password|otp|auth.?code|permission|access control|enable access|administrator|credit.?card|api.?key|권한|보안|비밀번호|인증|관리자|カード|権限",
+    re.I,
 )
 
 
@@ -71,6 +76,28 @@ def decide(policy, action, meta=None, page_url=""):
         return result(False, "focus_or_escape")
     if _effect(meta.get("name")) or meta.get("download") or meta.get("link_ping"):
         return result(True, "effect_or_transfer_indicator")
+    if _PRIVILEGED.search(str(meta.get("name", ""))):
+        return result(True, "sensitive_or_permission_control")
+    editable = not meta.get("readonly") and (
+        meta.get("editable")
+        or meta.get("tag") == "textarea"
+        or (
+            meta.get("tag") == "input"
+            and meta.get("type") in ("text", "search", "email", "url", "tel", "number")
+        )
+    )
+    if typ in ("fill", "type") and editable:
+        return result(False, "ordinary_text_edit")
+    if typ in ("select", "select_multiple") and meta.get("tag") == "select":
+        return result(False, "ordinary_selection")
+    if typ == "check" and meta.get("type") in ("checkbox", "radio"):
+        return result(False, "ordinary_check")
+    if (
+        typ == "keypress"
+        and editable
+        and (key in _EDIT_KEYS or (key == "A" and action.get("modifiers") == ["CONTROL"]))
+    ):
+        return result(False, "ordinary_edit_key")
     # Recognized GET search controls only. General drafts, autosaving settings,
     # editors, permission checkboxes and POST forms remain approval-gated.
     page, destination = _http(page_url), _http(meta.get("form_action"))
@@ -98,6 +125,14 @@ def decide(policy, action, meta=None, page_url=""):
         return result(False, "search_edit_key")
     if typ == "keypress" and key == "ENTER" and search_form and search_input:
         return result(False, "get_search_submit")
+    if (
+        typ == "keypress"
+        and key == "ENTER"
+        and meta.get("search_context")
+        and editable
+        and not meta.get("form_action")
+    ):
+        return result(False, "structured_search_submit")
     activate = typ in ("click", "double_click") or (typ == "keypress" and key in ("ENTER", "SPACE"))
     if not activate:
         return result(True, "unclassified_edit_or_key")

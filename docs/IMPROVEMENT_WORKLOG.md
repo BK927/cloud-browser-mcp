@@ -33,7 +33,21 @@ Do not report unrun installation, isolation or performance tests as passing.
   subsequent final-change focused tests: 46 passed (24.16 s). Full CI runs the
   committed source independently. Public-site live tests were not enabled in
   this run; optional native WebMCP/default runtime remains separately skipped.
-- Remaining: stage 2 frames/images and balanced-v2; stage 3 expanded operations;
+- Stage 1 public commit: `5ae42537809dc4e432f3df3072a1a202273a3742`.
+  CI run 34238001679 passed on the second attempt. First attempt: 315 non-browser
+  tests passed; 55 browser tests passed / 4 skipped / one standalone OAuth Chrome
+  fixture startup error (`BrowserConnectError`). No action retry or sandbox
+  weakening was added; the failed-run evidence remains available.
+- Stage 2 implemented: balanced-v2 ordinary editing/search, bounded CDP frame
+  inventory and exact-node actions (same/cross-origin, nested and legacy frames),
+  selective sensitive-frame masking, dynamic imagery and semantic coordinate
+  validation. Focused regression: 96 passed / 1 skipped; additional frame tests:
+  6 passed (25.52 s), including nested occlusion and changing canvas pixels.
+  Broad local run: 378 passed / 4 skipped; one outdated fault-injection helper
+  rejected the new capture keyword arguments. Updated the helper signature and
+  re-ran the complete completion/error suite: 12 passed (48.77 s). The production
+  post-dispatch uncertainty behavior and assertion remain unchanged.
+- Remaining: stage 3 expanded operations;
   stage 4 native/on-demand runtime and deployment-owner Pi comparison.
   No native performance savings have been established. No operational deployment
   has been requested for this intermediate source.

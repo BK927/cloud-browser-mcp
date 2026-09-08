@@ -90,12 +90,12 @@ def test_post_dispatch_observation_failure_is_uncertain(browser, monkeypatch):
     original = adapter._capture_state
     calls = 0
 
-    def capture(state):
+    def capture(state, **options):
         nonlocal calls
         calls += 1
         if calls > 1:
             raise BrowserError("OBSERVATION_FAILED", "Test post-click capture failure")
-        return original(state)
+        return original(state, **options)
 
     monkeypatch.setattr(adapter, "_capture_state", capture)
     with pytest.raises(BrowserError) as exc:
