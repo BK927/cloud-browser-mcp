@@ -81,7 +81,15 @@ def main():
             "browser",
             "python",
             "-",
-            input=(root / "scripts/ci_runtime_probe.py").read_bytes(),
+            # This standalone helper also validates the old baseline's runtime
+            # environment without inventing CB_NETWORK_ISOLATED=true in exec.
+            input=(
+                (root / "scripts/benchmark.py").read_text().split('if __name__ == "__main__":')[0]
+                + "\n"
+                + (root / "scripts/ci_runtime_probe.py")
+                .read_text()
+                .replace("cfg = Settings()", "cfg = running_settings()")
+            ).encode(),
         )
         compose(
             "exec",

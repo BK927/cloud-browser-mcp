@@ -410,6 +410,16 @@ def install(args):
     profiles.mkdir(exist_ok=True)
     os.chown(profiles, api_uid, browser_gid)
     profiles.chmod(0o2770)
+    # Chromium's crash/config helpers still need a writable HOME even with an
+    # explicit --user-data-dir. Keep it inside the owned data boundary, not /home
+    # (which ProtectHome intentionally hides from the service).
+    browser_home = data / "browser-home"
+    if browser_home.is_symlink():
+        raise RuntimeError("Dedicated browser HOME cannot be a symlink")
+    browser_home.mkdir(exist_ok=True)
+    os.chown(browser_home, pwd.getpwnam("cb-browser").pw_uid, browser_gid)
+    browser_home.chmod(0o700)
+    command("usermod", "--home", browser_home, "cb-browser")
     if active:
         command("systemctl", "stop", *[name + ".service" for name in NAMES])
     if old_cfg and old_cfg != cfg and marker_exists(old_cfg):

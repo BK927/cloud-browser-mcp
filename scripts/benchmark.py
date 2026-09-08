@@ -7,12 +7,15 @@ It mints a temporary local grant in the operator-owned DB and always revokes it.
 import argparse
 import asyncio
 import json
+import os
 import platform
 import secrets
 import time
+from pathlib import Path
 from urllib.parse import urlsplit
 
 import httpx2
+import psutil
 from mcp import ClientSession
 from mcp.client.streamable_http import streamable_http_client
 
@@ -21,8 +24,42 @@ from cloud_browser.oauth import Auth
 from cloud_browser.store import Store
 
 
+def running_settings():
+    """docker exec does not inherit entrypoint exports; read the same-UID API.
+
+    Kept in this standalone script so the byte-identical benchmark also runs on
+    the old baseline package. Never print the environment or copy it to a file.
+    """
+    if os.name == "posix":
+        group = Path("/proc/self/cgroup").read_text()
+        matches = []
+        for proc in psutil.process_iter():
+            try:
+                args = proc.cmdline()
+                if (
+                    proc.uids().effective == os.geteuid()
+                    and args
+                    and args[-1] == "serve"
+                    and any(
+                        arg == "cloud_browser.cli" or arg.endswith("/cloud-browser") for arg in args
+                    )
+                ):
+                    if Path(f"/proc/{proc.pid}/cgroup").read_text() == group:
+                        matches.append(proc)
+            except (OSError, psutil.Error):
+                continue
+        if len(matches) != 1:
+            raise RuntimeError(
+                "Identify exactly one same-UID API in this cgroup before benchmarking"
+            )
+        for key, value in matches[0].environ().items():
+            if key.startswith("CB_"):
+                os.environ[key] = value
+    return Settings()
+
+
 async def benchmark(args):
-    cfg = Settings()
+    cfg = running_settings()
     store = Store(cfg.data_dir / "state.sqlite3")
     auth = Auth(cfg, store)
     grant = secrets.token_urlsafe(32)

@@ -60,6 +60,14 @@ def main():
 
     installer.command = ci_command
     installer.CHROMIUM = "/usr/bin/google-chrome"
+    original_write = installer.write
+
+    def ci_write(path, text, *args, **kwargs):
+        if path == installer.PREFIX / "chromium-launcher":
+            text = text.replace('"$@"', '"$@" 2>/run/cloud-browser/chromium-ci.log')
+        return original_write(path, text, *args, **kwargs)
+
+    installer.write = ci_write
     installer.platform_check = lambda: None  # Guarded disposable CI fixture only.
     args = SimpleNamespace(
         source=str(source),
@@ -149,6 +157,9 @@ def main():
             "cloud-browser-network.service",
             check=False,
         )
+        chrome_log = Path("/run/cloud-browser/chromium-ci.log")
+        if chrome_log.is_file() and not chrome_log.is_symlink():
+            print(chrome_log.read_text(errors="replace")[-12000:])
         original_command(
             "systemctl", "stop", *[name + ".service" for name in installer.NAMES], check=False
         )
