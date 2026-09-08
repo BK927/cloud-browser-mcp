@@ -59,7 +59,32 @@ def main():
         return original_command(*args, **kwargs)
 
     installer.command = ci_command
-    installer.CHROMIUM = "/usr/bin/google-chrome"
+    engine = installer.PREFIX / "chromium-ci-engine"
+    installer.write(
+        engine,
+        """#!/usr/bin/python3
+import json, os, pathlib, pwd, sys
+home = pathlib.Path(pwd.getpwuid(os.geteuid()).pw_dir)
+details = {"uid": os.getuid(), "euid": os.geteuid(), "passwd_home": str(home), "environment": {k: os.getenv(k) for k in ("HOME", "XDG_CONFIG_HOME", "CHROME_CONFIG_HOME", "CHROME_USER_DATA_DIR")}, "home_writable": os.access(home, os.W_OK)}
+try:
+    probe = home / ".ci-write-probe"
+    with probe.open("x") as output:
+        output.write("fixture")
+    probe.unlink()
+    details["home_write_probe"] = "ok"
+except OSError as exc:
+    details["home_write_errno"] = exc.errno
+for argument in sys.argv[1:]:
+    if argument.startswith("--user-data-dir="):
+        profile = pathlib.Path(argument.split("=",1)[1])
+        details["profile_writable"] = os.access(profile, os.W_OK)
+        details["profile_mode"] = oct(profile.stat().st_mode & 0o7777)
+print(json.dumps(details), file=sys.stderr, flush=True)
+os.execv("/usr/bin/google-chrome", ["/usr/bin/google-chrome", *sys.argv[1:]])
+""",
+        0o755,
+    )
+    installer.CHROMIUM = str(engine)
     original_write = installer.write
 
     def ci_write(path, text, *args, **kwargs):
