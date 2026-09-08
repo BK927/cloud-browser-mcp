@@ -6,20 +6,26 @@ All callers must serialize access through the worker.
 
 import base64
 import hashlib
+import html
 import json
+import mimetypes
+import os
 import secrets
 import socket
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from .approval import decide
+from .approval import PASSIVE_ACTIONS, decide
+from .artifacts import Artifacts
 from .config import Settings
+from .events import Events
 from .image_privacy import mask_frames
+from .input_driver import NativeInput
 from .models import BrowserError
 from .observation import compact_node, paginate
-from .page_tools import PageTools, scrub_result, validate_arguments
-from .security import TOKEN, origin, redact, redact_tree, safe_url, validate_url
+from .page_tools import PageTools, schema_fingerprint, scrub_result, validate_arguments
+from .security import SENSITIVE, TOKEN, origin, redact, redact_tree, safe_url, validate_url
 from .uploads import verify_file
 
 SNAPSHOT = Path(__file__).with_name("snapshot.js").read_text(encoding="utf-8")
@@ -49,6 +55,9 @@ class TabState:
     frame_nodes: dict = field(default_factory=dict)
     frames_fingerprint: str = ""
     frame_backend_ids: list = field(default_factory=list)
+    query: dict = field(default_factory=dict)
+    events: object = field(default_factory=Events)
+    pending_input: object | None = None
     options: dict = field(
         default_factory=lambda: {
             "viewport_width": 1024,
@@ -129,9 +138,43 @@ class DrissionAdapter:
 
         state.tab._driver.set_callback("Network.requestWillBeSent", request_seen)
         state.tab.run_cdp("Network.enable")
+        self._watch_events(state)
+
+    @staticmethod
+    def _watch_events(state):
+        events, tab = state.events, state.tab
+        events.enabled = True
+
+        def opened(**kwargs):
+            tab._on_alert_open(**kwargs)
+            events.opened(**kwargs)
+
+        def closed(**kwargs):
+            tab._on_alert_close(**kwargs)
+            events.closed(**kwargs)
+
+        tab._driver.set_callback("Page.javascriptDialogOpening", opened, immediate=True)
+        tab._driver.set_callback("Page.javascriptDialogClosed", closed)
+        tab._driver.set_callback("Runtime.consoleAPICalled", events.console)
+        tab._driver.set_callback("Runtime.exceptionThrown", events.exception)
+        tab._driver.set_callback("Page.fileChooserOpened", events.file_chooser)
+        tab.run_cdp("Page.setInterceptFileChooserDialog", enabled=True)
+
+    @staticmethod
+    def _pause_events(state):
+        state.events.pause()
+        for event in (
+            "Runtime.consoleAPICalled",
+            "Runtime.exceptionThrown",
+            "Page.fileChooserOpened",
+        ):
+            state.tab._driver.set_callback(event, None)
+        state.tab.run_cdp("Page.setInterceptFileChooserDialog", enabled=False)
 
     def _capture_state(self, state, *, mode="auto", lightweight=False):
         tab = state.tab
+        if state.events.dialog:
+            raise BrowserError("DIALOG_OPEN", "A JavaScript dialog is open; inspect browser_dialog")
         tab.run_cdp("Runtime.releaseObjectGroup", objectGroup="cb-observation")
         tree = tab.run_cdp("Page.getFrameTree")["frameTree"]
         document = tree["frame"]
@@ -179,7 +222,7 @@ class DrissionAdapter:
         result = tab.run_cdp(
             "Runtime.evaluate",
             expression="globalThis.__cbOptions="
-            + json.dumps({"mode": mode, "lightweight": lightweight})
+            + json.dumps({"mode": mode, "lightweight": lightweight, "query": state.query})
             + ";"
             + SNAPSHOT,
             contextId=world,
@@ -195,6 +238,8 @@ class DrissionAdapter:
             functionDeclaration="function(){return this.data}",
             returnByValue=True,
         )["result"]["value"]
+        if data.get("query_error"):
+            raise BrowserError("INVALID_SELECTOR", "Observation CSS selector is invalid")
         data["form_digest"] = hashlib.sha256(
             json.dumps(data.pop("_form_states", []), sort_keys=True).encode()
         ).hexdigest()
@@ -269,7 +314,7 @@ class DrissionAdapter:
                         if current:
                             meta["_dom_name"] = meta["name"]
                             meta["name"] = " ".join(
-                                str(current.get("name", {}).get("value", meta["name"])).split()
+                                str(current.get("name", {}).get("value") or meta["name"]).split()
                             )[:500]
                             meta["role"] = current.get("role", {}).get("value", meta["role"])
                             for prop in current.get("properties", []):
@@ -506,6 +551,59 @@ class DrissionAdapter:
         data["restricted_frame_regions"] = masks
         data["readable_frames"] = sum(bool(f["readable"]) for f in inventory)
         data["frame_reading_truncated"] = any(not f["readable"] for f in inventory)
+        data["file_chooser"] = None
+        chooser = state.events.chooser
+        if chooser and not data["protected"]:
+            owner = (
+                state
+                if chooser["frame"] == getattr(state.tab, "_frame_id", None)
+                else next(
+                    (
+                        child
+                        for child in state.frame_states.values()
+                        if child.tab._frame_id == chooser["frame"]
+                    ),
+                    None,
+                )
+            )
+            if owner and not owner.data["protected"]:
+                try:
+                    element = self.Element(owner.tab, backend_id=chooser["backend"])
+                    attributes = element.run_js(
+                        "return {connected:this.isConnected,type:this.type,name:this.getAttribute('aria-label')||this.name||'File chooser',multiple:this.multiple,disabled:this.disabled}"
+                    )
+                    if (
+                        attributes["connected"]
+                        and attributes["type"] == "file"
+                        and not SENSITIVE.search(attributes["name"])
+                    ):
+                        meta = {
+                            "tag": "input",
+                            "type": "file",
+                            "name": attributes["name"],
+                            "role": "button",
+                            "href": None,
+                            "disabled": attributes["disabled"],
+                            "multiple": attributes["multiple"],
+                            "rect": {"x": 0, "y": 0, "width": 0, "height": 0},
+                            "_form_digest": owner.data["form_digest"],
+                            "form_fields": [],
+                            "form_action": None,
+                            "form_method": None,
+                            "submits_form": False,
+                        }
+                        target = (chooser["backend"], meta)
+                        if owner is state:
+                            state.nodes[chooser["node_id"]] = target
+                        else:
+                            state.frame_nodes[chooser["node_id"]] = (owner, target)
+                        data["file_chooser"] = {
+                            "node_id": chooser["node_id"],
+                            "frame_id": owner.frame_id,
+                            "multiple": attributes["multiple"],
+                        }
+                except Exception:
+                    data["file_chooser"] = {"error": "FILE_CHOOSER_UNAVAILABLE"}
         if texts and mode in ("auto", "semantic"):
             data["semantic_text"] = (data["semantic_text"] + "\n" + "\n".join(texts))[:250000]
         return data
@@ -615,6 +713,7 @@ class DrissionAdapter:
                 options.set_argument("--proxy-bypass-list=<-loopback>")
             browser = self.Chromium(options)
             self.sessions[sid] = {"browser": browser, "tabs": {}, "selected": None}
+            self._start_artifacts(sid)
             self._sync(sid)
         elif new_tab:
             self.sessions[sid]["browser"].new_tab()
@@ -821,8 +920,24 @@ class DrissionAdapter:
         max_chars=None,
         cursor=None,
         lightweight=False,
+        query=None,
     ):
         state = self._tab(session_id, tab_id)
+        if query is not None:
+            target_frame = query.get("frame_id")
+            if target_frame and target_frame not in state.frame_states:
+                self._capture_page(state, mode="interactive", lightweight=True)
+            if target_frame and target_frame not in state.frame_states:
+                raise BrowserError("FRAME_STALE", "Frame is not currently observable")
+            (state.frame_states[target_frame] if target_frame else state).query = {
+                k: v
+                for k, v in query.items()
+                if k in ("scope", "selector", "limit") and v is not None
+            }
+        elif not cursor:
+            state.query = {}
+            for child in state.frame_states.values():
+                child.query = {}
         data = self._capture_page(state, mode=mode, lightweight=lightweight)
         self._guard_page(data)
         if cursor:
@@ -840,6 +955,16 @@ class DrissionAdapter:
                     for nid, (child, target) in state.frame_nodes.items()
                 ]
                 for nid, (_, meta) in combined:
+                    if query:
+                        if query.get("frame_id") and meta.get("frame_id") != query["frame_id"]:
+                            continue
+                        if any(
+                            query.get(key)
+                            and query[key].casefold()
+                            not in str(meta.get("name" if key == "label" else key) or "").casefold()
+                            for key in ("role", "name", "label")
+                        ):
+                            continue
                     clean = {
                         k: redact_tree(v)
                         for k, v in meta.items()
@@ -860,7 +985,15 @@ class DrissionAdapter:
                         clean["rect_coordinate_space"] = "frame viewport CSS pixels"
                     interactive.append(compact_node({"node_id": nid, **clean}))
             snapshot = {
-                "semantic": redact(data["semantic_text"]) if mode in ("auto", "semantic") else "",
+                "semantic": redact(
+                    (
+                        state.frame_states[query["frame_id"]].data
+                        if query and query.get("frame_id")
+                        else data
+                    )["semantic_text"]
+                )
+                if mode in ("auto", "semantic")
+                else "",
                 "nodes": interactive,
             }
             offsets = (0, 0)
@@ -876,6 +1009,7 @@ class DrissionAdapter:
             readable_frames=data["readable_frames"],
             frame_reading_truncated=data["frame_reading_truncated"],
             frames=data["frames"],
+            file_chooser=data.get("file_chooser"),
         )
         if obs["truncated"]:
             next_cursor = "cursor_" + secrets.token_urlsafe(16)
@@ -993,9 +1127,32 @@ class DrissionAdapter:
 
     def prepare(self, session_id, tab_id, expected_revision, action):
         state = self._tab(session_id, tab_id)
+        if action["type"] == "dialog":
+            dialog = state.events.dialog
+            if not dialog or dialog["dialog_id"] != action["dialog_id"]:
+                raise BrowserError("DIALOG_STALE", "The observed dialog is no longer current")
+            if dialog["sensitive"]:
+                raise BrowserError(
+                    "SENSITIVE_INPUT",
+                    "Protected dialog requires private authentication",
+                    "user_action_required",
+                )
+            return self._cached_result(
+                session_id,
+                tab_id,
+                state,
+                target=dialog["message"],
+                requires_confirmation=True,
+                target_binding=dialog["_binding"] + dialog["dialog_id"],
+                action_policy={
+                    "mode": self.cfg.approval_policy,
+                    "approval_required": True,
+                    "reason": "dialog_response",
+                },
+            )
         data = self._capture_page(state)
         self._guard_page(data)
-        if not data["form_state_complete"]:
+        if not data["form_state_complete"] and action["type"] not in PASSIVE_ACTIONS:
             raise BrowserError(
                 "UNSUPPORTED_OPERATION",
                 "Form state exceeds safe observation budget; use manual control",
@@ -1018,6 +1175,11 @@ class DrissionAdapter:
             if not tool:
                 raise BrowserError("PAGE_TOOL_NOT_FOUND", "This page has not advertised that tool")
             validate_arguments(tool["inputSchema"], action["arguments"])
+            digest = schema_fingerprint(tool["inputSchema"])
+            preapproved = (
+                self.cfg.webmcp_read_allowlist.get(origin(state.tab.url), {}).get(tool["name"])
+                == digest
+            )
             return self._result(
                 session_id,
                 tab_id,
@@ -1025,8 +1187,26 @@ class DrissionAdapter:
                 destination=origin(state.tab.url),
                 destination_kind="page_tool",
                 data_sent=list(action["arguments"]),
-                requires_confirmation=True,
-                action_policy=decide(self.cfg.approval_policy, action),
+                requires_confirmation=not preapproved,
+                target_binding=hashlib.sha256(
+                    json.dumps(
+                        [
+                            state.document_key,
+                            origin(state.tab.url),
+                            tool["name"],
+                            digest,
+                            action["arguments"],
+                        ],
+                        sort_keys=True,
+                    ).encode()
+                ).hexdigest(),
+                action_policy={
+                    "mode": self.cfg.approval_policy,
+                    "approval_required": not preapproved,
+                    "reason": "operator_pinned_read_tool"
+                    if preapproved
+                    else "page_tool_requires_approval",
+                },
             )
         nid = action.get("node_id")
         meta = None
@@ -1039,7 +1219,10 @@ class DrissionAdapter:
                 )
             bid, meta = target
             self._guard_page(target_state.data)
-            if not target_state.data["form_state_complete"]:
+            if (
+                not target_state.data["form_state_complete"]
+                and action["type"] not in PASSIVE_ACTIONS
+            ):
                 raise BrowserError(
                     "UNSUPPORTED_OPERATION",
                     "Target frame form exceeds the verification budget; use manual control",
@@ -1064,7 +1247,7 @@ class DrissionAdapter:
                     verify_file(item)
             if meta["disabled"]:
                 raise BrowserError("NODE_NOT_ACTIONABLE", "Element is disabled")
-            if action["type"] == "fill" and not (
+            if action["type"] in ("fill", "type") and not (
                 meta["editable"]
                 or meta["tag"] == "textarea"
                 or (
@@ -1073,9 +1256,9 @@ class DrissionAdapter:
                 )
             ):
                 raise BrowserError("NODE_NOT_ACTIONABLE", "Target is not an editable text control")
-            if action["type"] == "select" and meta["tag"] != "select":
+            if action["type"] in ("select", "select_multiple") and meta["tag"] != "select":
                 raise BrowserError("NODE_NOT_ACTIONABLE", "Target is not a select control")
-            if action["type"] == "fill" and meta.get("readonly"):
+            if action["type"] in ("fill", "type") and meta.get("readonly"):
                 raise BrowserError("NODE_NOT_ACTIONABLE", "Target is read-only")
             if action["type"] == "select":
                 if meta.get("multiple"):
@@ -1098,6 +1281,39 @@ class DrissionAdapter:
                     "NODE_NOT_ACTIONABLE",
                     "A radio cannot be unchecked directly; select another option",
                 )
+            if action["type"] == "select_multiple":
+                if not meta.get("multiple"):
+                    raise BrowserError("NODE_NOT_ACTIONABLE", "Target is not a multiple select")
+                values = action["values"]
+                if len(set(values)) != len(values):
+                    raise BrowserError("INVALID_INPUT", "Duplicate selected values")
+                for value in values:
+                    choices = [
+                        o for o in meta["options"] if o["value"] == value and not o["disabled"]
+                    ]
+                    if len(choices) != 1:
+                        raise BrowserError(
+                            "NODE_NOT_ACTIONABLE", "Option is ambiguous, disabled or unobserved"
+                        )
+            if (
+                action["type"] == "keypress"
+                and action["keys"][0] in ("C", "V", "X")
+                and set(action.get("modifiers", [])) & {"CONTROL", "META"}
+            ):
+                raise BrowserError(
+                    "POLICY_BLOCKED",
+                    "Use the work-local browser_clipboard, not global clipboard shortcuts",
+                    "blocked",
+                )
+        drag_binding = None
+        if action["type"] == "drag":
+            dest_state, dest = self._node_target(state, action["target_node_id"])
+            if not dest:
+                raise BrowserError("STALE_NODE", "Drag destination changed; observe it again")
+            self._guard_page(dest_state.data)
+            if dest[1]["disabled"] or dest[1]["type"] == "file":
+                raise BrowserError("NODE_NOT_ACTIONABLE", "Drag destination is unavailable")
+            drag_binding = [dest_state.document_key, dest[0], self._node_signature(dest[1])]
         if "screenshot_id" in action:
             shot = state.screenshot
             if (
@@ -1215,6 +1431,7 @@ class DrissionAdapter:
                         target_state.document_key,
                         nid,
                         self._node_signature(meta) if meta else data["viewport"],
+                        drag_binding,
                     ],
                     sort_keys=True,
                 ).encode()
@@ -1224,6 +1441,31 @@ class DrissionAdapter:
     def act(self, session_id, tab_id, expected_revision, action):
         self.prepare(session_id, tab_id, expected_revision, action)
         state = self._tab(session_id, tab_id)
+        if action["type"] == "dialog":
+            try:
+                state.tab.handle_alert(
+                    accept=action["operation"] == "accept", send=action.get("text"), timeout=0.1
+                )
+                time.sleep(0.05)
+                if state.pending_input:
+                    state.pending_input.release()
+                    if state.pending_input.held_key or state.pending_input.held_button:
+                        raise BrowserError("RESULT_UNCERTAIN", "Input release remains unconfirmed")
+                    state.pending_input = None
+                self._capture_page(state, mode="interactive")
+            except Exception as exc:
+                raise BrowserError(
+                    "RESULT_UNCERTAIN", "Dialog response was dispatched; do not repeat it"
+                ) from exc
+            return self._result(
+                session_id,
+                tab_id,
+                action_result={
+                    "performed": True,
+                    "page_changed": True,
+                    "navigation_occurred": False,
+                },
+            )
         before_url, before_fp = state.tab.url, state.fingerprint
         before_frames = state.frames_fingerprint
         old_tabs = set(self._session(session_id)["tabs"])
@@ -1233,6 +1475,7 @@ class DrissionAdapter:
         performed = True
         dispatched = False
         tool_result = None
+        native = NativeInput(state.tab)
 
         def native_click(click_count=1):
             nonlocal dispatched
@@ -1249,24 +1492,14 @@ class DrissionAdapter:
                     "NODE_NOT_ACTIONABLE", "Observed element is covered or outside the viewport"
                 )
             x, y = self._frame_point(target_state, x, y)
-            for count in range(1, click_count + 1):
-                dispatched = True
-                state.tab.run_cdp(
-                    "Input.dispatchMouseEvent",
-                    type="mousePressed",
-                    x=x,
-                    y=y,
-                    button="left",
-                    clickCount=count,
-                )
-                state.tab.run_cdp(
-                    "Input.dispatchMouseEvent",
-                    type="mouseReleased",
-                    x=x,
-                    y=y,
-                    button="left",
-                    clickCount=count,
-                )
+            dispatched = True
+            native.click(
+                x,
+                y,
+                count=click_count,
+                button={"right_click": "right", "middle_click": "middle"}.get(typ, "left"),
+                modifiers=action.get("modifiers", []),
+            )
 
         def focus_exact():
             nonlocal dispatched
@@ -1277,28 +1510,13 @@ class DrissionAdapter:
             ):
                 raise BrowserError("NODE_NOT_ACTIONABLE", "Observed element cannot receive focus")
 
-        def key_event(key, code, virtual, text=None, modifiers=0):
-            parameters = {
-                "key": key,
-                "code": code,
-                "windowsVirtualKeyCode": virtual,
-                "modifiers": modifiers,
-            }
-            state.tab.run_cdp(
-                "Input.dispatchKeyEvent",
-                type="keyDown",
-                **parameters,
-                **({"text": text} if text else {}),
-            )
-            state.tab.run_cdp("Input.dispatchKeyEvent", type="keyUp", **parameters)
-
         try:
             if typ == "page_tool":
                 dispatched = True
                 tool_result = state.page_tools.invoke(
                     state.advertised_tools["frame_id"], action["tool_name"], action["arguments"]
                 )
-            elif typ in ("click", "double_click"):
+            elif typ in ("click", "double_click", "right_click", "middle_click"):
                 native_click(2 if typ == "double_click" else 1)
             elif typ == "upload":
                 dispatched = True
@@ -1307,13 +1525,47 @@ class DrissionAdapter:
                     backendNodeId=target[0],
                     files=[item["path"] for item in action["_uploads"]],
                 )
+                state.events.chooser = None
             elif typ == "fill":
                 focus_exact()
-                key_event("a", "KeyA", 65, modifiers=2)
+                native.key("A", ["CONTROL"])
                 if action["text"]:
                     state.tab.run_cdp("Input.insertText", text=action["text"])
                 else:
-                    key_event("Backspace", "Backspace", 8)
+                    native.key("BACKSPACE")
+            elif typ == "type":
+                focus_exact()
+                for char in action["text"]:
+                    state.tab.run_cdp("Input.insertText", text=char)
+                    if action.get("interval_ms"):
+                        time.sleep(action["interval_ms"] / 1000)
+            elif typ == "select_multiple":
+                dispatched = True
+                element.run_js(
+                    "const values=new Set(JSON.parse(arguments[0]));for(const o of this.options)o.selected=values.has(o.value);this.dispatchEvent(new Event('input',{bubbles:true}));this.dispatchEvent(new Event('change',{bubbles:true}));",
+                    json.dumps(action["values"]),
+                )
+            elif typ == "drag":
+                destination_state, destination = self._node_target(state, action["target_node_id"])
+                points = []
+                for owner, target_node in (
+                    (target_state, target),
+                    (destination_state, destination),
+                ):
+                    handle = self.Element(owner.tab, backend_id=target_node[0])
+                    point = handle.run_js(
+                        "const r=this.getBoundingClientRect(),x=r.x+r.width/2,y=r.y+r.height/2,h=document.elementFromPoint(x,y);return {x,y,ok:this.isConnected&&(h===this||this.contains(h))}"
+                    )
+                    if not point["ok"]:
+                        raise BrowserError(
+                            "NODE_NOT_ACTIONABLE",
+                            "Drag endpoint is covered or outside the viewport",
+                        )
+                    points.append(self._frame_point(owner, point["x"], point["y"]))
+                dispatched = True
+                native.drag(
+                    *points, steps=action.get("steps", 12), modifiers=action.get("modifiers", [])
+                )
             elif typ == "select":
                 dispatched = True
                 if not element.select.by_value(action["value"], timeout=1):
@@ -1325,21 +1577,7 @@ class DrissionAdapter:
                     performed = False
             elif typ == "keypress":
                 focus_exact()
-                key, virtual, text = {
-                    "ENTER": ("Enter", 13, "\r"),
-                    "TAB": ("Tab", 9, None),
-                    "ESCAPE": ("Escape", 27, None),
-                    "SPACE": (" ", 32, " "),
-                    "ARROWUP": ("ArrowUp", 38, None),
-                    "ARROWDOWN": ("ArrowDown", 40, None),
-                    "ARROWLEFT": ("ArrowLeft", 37, None),
-                    "ARROWRIGHT": ("ArrowRight", 39, None),
-                    "BACKSPACE": ("Backspace", 8, None),
-                    "DELETE": ("Delete", 46, None),
-                    "HOME": ("Home", 36, None),
-                    "END": ("End", 35, None),
-                }[action["keys"][0]]
-                key_event(key, "Space" if key == " " else key, virtual, text)
+                native.key(action["keys"][0], action.get("modifiers", []))
             elif typ == "scroll" and element:
                 dispatched = True
                 element.run_js(
@@ -1367,26 +1605,23 @@ class DrissionAdapter:
                         deltaY=action["delta_y"],
                     )
                 else:
-                    for count in range(1, 3 if typ == "double_click_at" else 2):
-                        state.tab.run_cdp(
-                            "Input.dispatchMouseEvent",
-                            type="mousePressed",
-                            x=x,
-                            y=y,
-                            button="left",
-                            clickCount=count,
-                        )
-                        state.tab.run_cdp(
-                            "Input.dispatchMouseEvent",
-                            type="mouseReleased",
-                            x=x,
-                            y=y,
-                            button="left",
-                            clickCount=count,
-                        )
+                    native.click(x, y, count=2 if typ == "double_click_at" else 1)
             else:
                 raise BrowserError("UNSUPPORTED_OPERATION", "Action is not implemented")
             time.sleep(state.options["wait_ms"] / 1000)
+            if state.events.dialog:
+                return self._cached_result(
+                    session_id,
+                    tab_id,
+                    state,
+                    action_result={
+                        "performed": performed,
+                        "page_changed": True,
+                        "navigation_occurred": False,
+                    },
+                    dialog=self.dialog_info(session_id, tab_id)["dialog"],
+                    notices=["Dialog opened; DOM collection waits for an explicit dialog response"],
+                )
             self._sync(session_id)
             self._capture_page(state)
         except BrowserError as exc:
@@ -1397,9 +1632,28 @@ class DrissionAdapter:
                 ) from exc
             raise
         except Exception as exc:
+            if dispatched and state.events.dialog:
+                return self._cached_result(
+                    session_id,
+                    tab_id,
+                    state,
+                    action_result={
+                        "performed": True,
+                        "page_changed": True,
+                        "navigation_occurred": False,
+                    },
+                    dialog=self.dialog_info(session_id, tab_id)["dialog"],
+                    notices=[
+                        "Dialog opened during input; any pending input release is completed after its response"
+                    ],
+                )
             raise BrowserError(
                 "RESULT_UNCERTAIN", "Action may have been dispatched; do not repeat automatically"
             ) from exc
+        finally:
+            native.release()
+            if native.held_key or native.held_button:
+                state.pending_input = native
         changed = before_fp != state.fingerprint or before_frames != state.frames_fingerprint
         added = list(set(self._session(session_id)["tabs"]) - old_tabs)
         return self._result(
@@ -1424,6 +1678,206 @@ class DrissionAdapter:
                 "new_tab_ids": added,
             },
         )
+
+    def _start_artifacts(self, session_id):
+        session = self._session(session_id)
+        root = self.cfg.data_dir / "artifacts" / session_id
+        artifacts = Artifacts(
+            root,
+            max_bytes=self.cfg.max_artifact_mb * 1048576,
+            file_bytes=self.cfg.max_artifact_file_mb * 1048576,
+            ttl=self.cfg.artifact_ttl,
+        )
+        if os.name == "posix" and not self.cfg.development:
+            import grp
+
+            gid = grp.getgrnam(self.cfg.browser_group).gr_gid
+            for directory in (root.parent, root):
+                os.chown(directory, -1, gid)
+                directory.chmod(0o2770)
+        session["artifacts"] = artifacts
+        session["downloads"] = {}
+        browser = session["browser"]
+
+        def cancel(guid):
+            try:
+                browser._run_cdp("Browser.cancelDownload", guid=guid)
+            except Exception:
+                pass
+
+        def began(guid, suggestedFilename, **kwargs):
+            if session.get("paused"):
+                cancel(guid)
+                return
+            try:
+                key = artifacts.reserve(
+                    suggestedFilename,
+                    mimetypes.guess_type(suggestedFilename)[0] or "application/octet-stream",
+                    storage_name=guid,
+                )
+                session["downloads"][guid] = key
+            except BrowserError:
+                cancel(guid)
+
+        def progress(guid, receivedBytes, state, **kwargs):
+            key = session["downloads"].get(guid)
+            if (
+                not key
+                or session.get("paused")
+                or not artifacts.progress(
+                    key,
+                    max(receivedBytes, kwargs.get("totalBytes", 0))
+                    if kwargs.get("totalBytes", 0) > artifacts.file_bytes
+                    else receivedBytes,
+                    state,
+                )
+            ):
+                cancel(guid)
+
+        browser._driver.set_callback("Browser.downloadWillBegin", began)
+        browser._driver.set_callback("Browser.downloadProgress", progress)
+        browser._run_cdp(
+            "Browser.setDownloadBehavior",
+            behavior="allowAndName",
+            downloadPath=str(root.resolve()),
+            eventsEnabled=True,
+        )
+
+    def artifacts(self, session_id, operation="list", artifact_id=None, tab_id=None, format="text"):
+        session = self._session(session_id)
+        files = session["artifacts"]
+        if operation == "list":
+            return {"session_id": session_id, "artifacts": files.list()}
+        if operation == "get":
+            return {"session_id": session_id, **files.get(artifact_id)}
+        if operation in ("delete", "clear"):
+            keys = (
+                [artifact_id] if operation == "delete" else [i["artifact_id"] for i in files.list()]
+            )
+            for key in keys:
+                for guid, item in list(session["downloads"].items()):
+                    if item == key:
+                        if files.items[key]["state"] == "in_progress":
+                            session["browser"]._run_cdp("Browser.cancelDownload", guid=guid)
+                        del session["downloads"][guid]
+                files.delete(key)
+            return {"session_id": session_id, "removed_artifact_ids": keys}
+        if not tab_id:
+            raise BrowserError("INVALID_INPUT", "Export requires a tab")
+        if format == "image":
+            seen = self.observe(session_id, tab_id, mode="visual")
+            shot = seen["_image"]
+            item = files.put(
+                base64.b64decode(shot["data"]),
+                "page.png" if shot["mimeType"] == "image/png" else "page.jpg",
+                shot["mimeType"],
+            )
+        else:
+            seen = self.observe(session_id, tab_id, mode="semantic", max_chars=100000)
+            text = seen["observation"]["semantic_snapshot"]
+            # Safe HTML is a new inert text document, never the site's executable markup.
+            data = (
+                (
+                    '<!doctype html><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="default-src \'none\'"><pre>'
+                    + html.escape(text)
+                    + "</pre>"
+                )
+                if format == "html"
+                else text
+            )
+            item = files.put(
+                data.encode(),
+                "page.html" if format == "html" else "page.txt",
+                "text/html" if format == "html" else "text/plain",
+            )
+            item["source_truncated"] = (
+                seen["observation"]["truncated"] or seen["observation"]["semantic_source_truncated"]
+            )
+        return {"session_id": session_id, "tab_id": tab_id, "artifact": item}
+
+    def private_download(self, session_id, artifact_id):
+        return self._session(session_id)["artifacts"].private_download(artifact_id)
+
+    @staticmethod
+    def _cached_result(session_id, tab_id, state, **extra):
+        return dict(
+            session_id=session_id,
+            tab_id=tab_id,
+            revision=state.revision,
+            page={
+                "url": safe_url(state.data.get("url", "about:blank")),
+                "title": redact(state.data.get("title", "")) or None,
+            },
+            page_cached=True,
+            **extra,
+        )
+
+    def dialog_info(self, session_id, tab_id):
+        state = self._tab(session_id, tab_id)
+        dialog = state.events.dialog
+        return self._cached_result(
+            session_id,
+            tab_id,
+            state,
+            dialog={k: v for k, v in dialog.items() if not k.startswith("_")} if dialog else None,
+        )
+
+    def logs(self, session_id, tab_id, after=0, limit=50):
+        state = self._tab(session_id, tab_id)
+        return self._cached_result(session_id, tab_id, state, logs=state.events.read(after, limit))
+
+    def clipboard_read(self, session_id, tab_id, node_id, expected_revision):
+        state = self._tab(session_id, tab_id)
+        self.prepare(session_id, tab_id, expected_revision, {"type": "copy", "node_id": node_id})
+        owner, target = self._node_target(state, node_id)
+        element = self.Element(owner.tab, backend_id=target[0])
+        text = element.run_js(
+            "return String('value' in this && this.type!=='file'?this.value:this.innerText||'').slice(0,20000)"
+        )
+        return {"text": redact(text)}
+
+    def wait(self, session_id, tab_id, condition, timeout_ms=5000):
+        state = self._tab(session_id, tab_id)
+        deadline = time.monotonic() + timeout_ms / 1000
+        while True:
+            typ = condition["type"]
+            if typ == "dialog":
+                matched = bool(state.events.dialog)
+            elif typ == "download":
+                items = self._session(session_id)["artifacts"].list()
+                matched = any(i["state"] == "completed" for i in items)
+            else:
+                seen = self.observe(
+                    session_id,
+                    tab_id,
+                    mode="interactive",
+                    max_chars=8000,
+                    lightweight=True,
+                    query=condition.get("query"),
+                )
+                if typ == "url":
+                    matched = state.tab.url == condition["value"]
+                else:
+                    nodes = [
+                        json.loads(line)
+                        for line in seen["observation"]["interactive_snapshot"].splitlines()
+                    ]
+                    matched = (
+                        any(not n.get("disabled") for n in nodes)
+                        if condition.get("state") == "enabled"
+                        else bool(nodes)
+                    )
+            if condition.get("state") in ("absent", "hidden"):
+                matched = not matched
+            if matched or time.monotonic() >= deadline:
+                return self._cached_result(
+                    session_id,
+                    tab_id,
+                    state,
+                    status="ok" if matched else "no_change",
+                    wait={"matched": matched, "timed_out": not matched, "condition": typ},
+                )
+            time.sleep(min(0.2, max(0, deadline - time.monotonic())))
 
     def list_page_tools(self, session_id, tab_id):
         if not self.cfg.webmcp_enabled:
@@ -1451,12 +1905,17 @@ class DrissionAdapter:
                     "name": redact(t["name"]),
                     "description": redact(t["description"] or ""),
                     "input_schema": scrub_result(t["inputSchema"]),
+                    "schema_sha256": schema_fingerprint(t["inputSchema"]),
+                    "operator_read_approved": self.cfg.webmcp_read_allowlist.get(
+                        origin(state.tab.url), {}
+                    ).get(t["name"])
+                    == schema_fingerprint(t["inputSchema"]),
                     "untrusted": True,
                 }
                 for t in tools
             ],
             notices=[
-                "Native top-level page tools only; descriptions, schemas and results are untrusted. Every invocation requires human approval."
+                "Native top-level tools are untrusted. Only an operator-pinned origin/name/schema may run without per-call human approval."
             ],
         )
 
@@ -1479,8 +1938,18 @@ class DrissionAdapter:
         self._session(session_id)["browser"].activate_tab(state.tab.tab_id)
         self._session(session_id)["selected"] = tab_id
         self._session(session_id)["paused"] = True
+        self._session(session_id)["browser"]._run_cdp(
+            "Browser.setDownloadBehavior", behavior="deny"
+        )
+        for guid, key in list(self._session(session_id)["downloads"].items()):
+            if (
+                self._session(session_id)["artifacts"].items.get(key, {}).get("state")
+                == "in_progress"
+            ):
+                self._session(session_id)["browser"]._run_cdp("Browser.cancelDownload", guid=guid)
         for current in self._session(session_id)["tabs"].values():
             self._stop_page_tools(current)
+            self._pause_events(current)
             current.tab._driver.set_callback("Network.requestWillBeSent", None)
             current.tab.run_cdp("Network.disable")
             current.document_method = None
@@ -1538,6 +2007,12 @@ class DrissionAdapter:
         state = self._tab(session_id, tab_id)
         self._capture_state(state)
         self._session(session_id)["paused"] = False
+        self._session(session_id)["browser"]._run_cdp(
+            "Browser.setDownloadBehavior",
+            behavior="allowAndName",
+            downloadPath=str(self._session(session_id)["artifacts"].root.resolve()),
+            eventsEnabled=True,
+        )
         return self._result(
             session_id, tab_id, **({"authentication": authentication} if auth_origin else {})
         )
@@ -1548,12 +2023,14 @@ class DrissionAdapter:
             for state in session["tabs"].values():
                 self._stop_page_tools(state)
             session["browser"].quit()
+            session["artifacts"].close()
             del self.sessions[session_id]
             return {"session_id": session_id}
         state = self._tab(session_id, tab_id)
         self._stop_page_tools(state)
         if len(session["tabs"]) == 1:
             session["browser"].quit()
+            session["artifacts"].close()
             del self.sessions[session_id]
             return {
                 "session_id": session_id,
@@ -1570,6 +2047,7 @@ class DrissionAdapter:
         for session in self.sessions.values():
             try:
                 session["browser"].quit()
+                session["artifacts"].close()
             except Exception:
                 pass
         self.sessions.clear()

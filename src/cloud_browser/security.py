@@ -33,10 +33,15 @@ SENSITIVE = re.compile(
 TOKEN = re.compile(
     r"(?:Bearer\s+\S+|eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+|(?:sk-|ghp_|github_pat_)[A-Za-z0-9_-]{15,})"
 )
+SECRET_ASSIGNMENT = re.compile(
+    r"(?i)\b(password|passwd|otp|authorization|cookie|api[_ -]?key|access[_ -]?token|refresh[_ -]?token|secret)\s*[:=]\s*(?:\"[^\"]*\"|'[^']*'|[^\s,;<>]+)"
+)
 
 
 def redact(text: str) -> str:
-    return TOKEN.sub("[REDACTED]", text)
+    return SECRET_ASSIGNMENT.sub(
+        lambda m: m.group(1) + "=[REDACTED]", TOKEN.sub("[REDACTED]", text)
+    )
 
 
 def redact_tree(value):
@@ -58,11 +63,65 @@ def safe_url(url: str) -> str:
             host = f"[{host}]"
         if p.port:
             host += f":{p.port}"
-        # Query names remain useful; values and fragments are never emitted.
+        # Preserve ordinary navigation/search parameters, not arbitrary opaque
+        # server parameters or authentication material. Never preserve userinfo.
+        public_keys = {
+            "q",
+            "query",
+            "search",
+            "search_query",
+            "p",
+            "page",
+            "sort",
+            "order",
+            "filter",
+            "id",
+            "v",
+            "t",
+            "lang",
+            "tab",
+            "view",
+            "category",
+            "tag",
+        }
+
+        def public_value(key, value):
+            if (
+                key.casefold() not in public_keys
+                or len(value) > 1000
+                or TOKEN.search(value)
+                or SECRET_ASSIGNMENT.search(value)
+                or re.search(r"[A-Za-z0-9_-]{40,}", value)
+            ):
+                return "[REDACTED]"
+            return value
+
         query = urlencode(
-            [(k, "[REDACTED]") for k, _ in parse_qsl(p.query, keep_blank_values=True)]
+            [(redact(k), public_value(k, v)) for k, v in parse_qsl(p.query, keep_blank_values=True)]
         )
-        return urlunsplit((p.scheme, host, redact(p.path), query, ""))
+        fragment = p.fragment
+        if (
+            len(fragment) > 1000
+            or re.search(
+                r"token|auth|session|password|secret|(?:^|[?&])code=|[A-Za-z0-9_-]{40,}",
+                fragment,
+                re.I,
+            )
+            or TOKEN.search(fragment)
+        ):
+            fragment = ""
+        elif "?" in fragment:
+            anchor, values = fragment.split("?", 1)
+            fragment = (
+                anchor
+                + "?"
+                + urlencode(
+                    [(k, public_value(k, v)) for k, v in parse_qsl(values, keep_blank_values=True)]
+                )
+            )
+        elif "=" in fragment:
+            fragment = ""
+        return urlunsplit((p.scheme, host, redact(p.path), query, fragment))
     except ValueError:
         return "[REDACTED URL]"
 

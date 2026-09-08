@@ -31,6 +31,7 @@ class BrowserService:
         self.pending = {}
         self.leases = {}
         self.control_disconnectors = set()
+        self.clipboards = {}
         self.uploads = Uploads(settings)
         self.owners = {}
         self.tab_cache = {}
@@ -86,6 +87,8 @@ class BrowserService:
         return state
 
     def _remember_session(self, sid, state, reason):
+        if state != "active":
+            self.clipboards.pop(sid, None)
         self.store.put(
             "session",
             sid,
@@ -96,7 +99,7 @@ class BrowserService:
         lease = self.leases.get(sid)
         # An expired lease stays locked until human completion/cancellation. Auto-unlock
         # could reveal credentials left onscreen. Websocket access still expires.
-        return lease if lease and lease["state"] == "active" else None
+        return lease if lease and lease["state"] in ("active", "returning") else None
 
     def _check_control(self, sid, observation=False):
         lease = self._lease(sid)
@@ -465,7 +468,17 @@ class BrowserService:
             confirmation_token,
         )
 
-    async def _act(self, session_id, tab_id, expected_revision, action, confirmation_token=None):
+    async def _act(
+        self,
+        session_id,
+        tab_id,
+        expected_revision,
+        action,
+        confirmation_token=None,
+        completion=None,
+        completion_timeout_ms=5000,
+        follow_up=False,
+    ):
         self._session(session_id)
         self._check_control(session_id)
         self._check_uncertain(session_id)
@@ -657,7 +670,145 @@ class BrowserService:
         )
         if "action_policy" in prepared:
             result["action_policy"] = prepared["action_policy"]
+        if completion and result.get("action_result", {}).get("performed"):
+            try:
+                waited = await self._wait(session_id, tab_id, completion, completion_timeout_ms)
+                result["completion"] = waited.get("wait")
+            except BrowserError as exc:
+                result["completion"] = {
+                    "matched": False,
+                    "error": {"code": exc.code, "message": exc.message},
+                }
+        if follow_up and not result.get("dialog"):
+            try:
+                observed = await self._observe(
+                    session_id, tab_id, mode="interactive", max_chars=2000, lightweight=True
+                )
+                result["follow_up"] = observed.get("observation")
+                result["revision"] = observed.get("revision", result.get("revision"))
+            except BrowserError as exc:
+                result["follow_up"] = {"error": {"code": exc.code, "message": exc.message}}
         return result
+
+    async def _wait(self, session_id, tab_id, condition, timeout_ms=5000):
+        self._session(session_id)
+        self._check_control(session_id, observation=True)
+        if not 0 <= timeout_ms <= 10000:
+            raise BrowserError("INVALID_INPUT", "Wait timeout must be 0..10000 ms")
+        return await self._rpc(
+            "wait", session_id=session_id, tab_id=tab_id, condition=condition, timeout_ms=timeout_ms
+        )
+
+    async def _logs(self, session_id, tab_id, after=0, limit=50):
+        self._session(session_id)
+        self._check_control(session_id, observation=True)
+        return await self._rpc(
+            "logs", session_id=session_id, tab_id=tab_id, after=after, limit=limit
+        )
+
+    async def _artifacts(
+        self, session_id, operation="list", artifact_id=None, tab_id=None, format="text"
+    ):
+        self._session(session_id)
+        self._check_control(session_id, observation=operation in ("list", "get", "export"))
+        if operation == "export" and format == "image":
+            self._admit()
+        return await self._rpc(
+            "artifacts",
+            session_id=session_id,
+            operation=operation,
+            artifact_id=artifact_id,
+            tab_id=tab_id,
+            format=format,
+        )
+
+    async def private_download(self, session_id, artifact_id):
+        async with self._command_lock():
+            self._session(session_id)
+            self._check_control(session_id, observation=True)
+            return await self._rpc(
+                "private_download", session_id=session_id, artifact_id=artifact_id
+            )
+
+    async def _dialog(
+        self,
+        session_id,
+        tab_id,
+        operation="get",
+        dialog_id=None,
+        text=None,
+        confirmation_token=None,
+    ):
+        self._session(session_id)
+        self._check_control(session_id, observation=operation == "get")
+        info = await self._rpc("dialog_info", session_id=session_id, tab_id=tab_id)
+        if operation == "get":
+            return info
+        if not dialog_id:
+            raise BrowserError("INVALID_INPUT", "A previously observed dialog_id is required")
+        return await self._act(
+            session_id,
+            tab_id,
+            info["revision"],
+            {"type": "dialog", "operation": operation, "dialog_id": dialog_id, "text": text},
+            confirmation_token,
+        )
+
+    async def _clipboard(
+        self,
+        session_id,
+        operation,
+        text=None,
+        tab_id=None,
+        node_id=None,
+        expected_revision=None,
+        confirmation_token=None,
+    ):
+        self._session(session_id)
+        self._check_control(session_id, observation=operation in ("read", "copy"))
+        if text is not None and (len(text) > 20000 or TOKEN.search(text)):
+            raise BrowserError(
+                "SENSITIVE_INPUT",
+                "Clipboard text is too large or contains a secret token",
+                "blocked",
+            )
+        if operation == "write":
+            self.clipboards[session_id] = text or ""
+        elif operation == "clear":
+            self.clipboards.pop(session_id, None)
+        elif operation in ("paste", "copy"):
+            if not tab_id or not node_id or expected_revision is None:
+                raise BrowserError(
+                    "INVALID_INPUT", "Copy/paste requires a tab, observed node and revision"
+                )
+            if operation == "paste":
+                return await self._act(
+                    session_id,
+                    tab_id,
+                    expected_revision,
+                    {
+                        "type": "fill",
+                        "node_id": node_id,
+                        "text": self.clipboards.get(session_id, ""),
+                    },
+                    confirmation_token,
+                )
+            copied = await self._rpc(
+                "clipboard_read",
+                session_id=session_id,
+                tab_id=tab_id,
+                node_id=node_id,
+                expected_revision=expected_revision,
+            )
+            self.clipboards[session_id] = copied["text"]
+        return {
+            "session_id": session_id,
+            "clipboard": {
+                "text": self.clipboards.get(session_id, "") if operation == "read" else None,
+                "length": len(self.clipboards.get(session_id, "")),
+                "scope": "work-local-text-only",
+            },
+        }
 
     async def approve(self, review_id, approved: bool):
         async with self.lock:
@@ -699,6 +850,7 @@ class BrowserService:
                 "Operator configuration identifies only passkey/security-key authentication; forwarding is unsupported",
                 "user_action_required",
             )
+        self.clipboards.pop(session_id, None)
         await self._rpc("focus", session_id=session_id, tab_id=tab_id)
         lease = {
             "handoff_id": "handoff_" + secrets.token_urlsafe(18),
@@ -738,7 +890,7 @@ class BrowserService:
         return {k: v for k, v in lease.items() if k != "expires"} | {
             "expires_at": iso(lease["expires"]),
             "control_url": self.cfg.control_origin + "/",
-            "automation_paused": lease["state"] == "active",
+            "automation_paused": lease["state"] in ("active", "returning"),
             "control_access_expired": lease["state"] == "active"
             and lease["expires"] <= time.time(),
         }
@@ -903,6 +1055,21 @@ class BrowserService:
             "frame_observation": "frame-ids-with-explicit-partial-results",
             "authentication_verification": bool(self.cfg.auth_rules),
             "authentication_verification_scope": "operator_rules",
+            "scoped_observation": True,
+            "extended_input": [
+                "type",
+                "modifiers",
+                "right_click",
+                "middle_click",
+                "drag",
+                "select_multiple",
+            ],
+            "condition_wait": "bounded-10s",
+            "dialogs": "explicit-human-approved-responses",
+            "logs": "bounded-metadata-no-console-arguments",
+            "clipboard": "work-local-text-only",
+            "artifacts": "bounded-work-local-downloads-and-safe-exports",
+            "webmcp_read_allowlist": bool(self.cfg.webmcp_read_allowlist),
         }
 
     async def _status(self, session_id=None):
@@ -980,9 +1147,17 @@ class BrowserService:
             lease = self.leases.get(session_id)
             if lease:
                 lease["state"] = "returning"
-            await asyncio.wait_for(
-                asyncio.gather(*(close() for close in list(self.control_disconnectors))), 5
-            )
+            try:
+                await asyncio.wait_for(
+                    asyncio.gather(*(close() for close in list(self.control_disconnectors))), 5
+                )
+            except (TimeoutError, Exception) as exc:
+                if lease:
+                    lease["state"] = "active"
+                raise BrowserError(
+                    "CONTROL_DISCONNECT_FAILED",
+                    "Private control could not be disconnected; automation remains paused",
+                ) from exc
             try:
                 await self._rpc("close", session_id=session_id, scope="session")
             except BrowserError:

@@ -39,6 +39,11 @@ class Settings(BaseSettings):
     auth_rules: dict[str, AuthRule] = Field(default_factory=dict)
     webmcp_enabled: bool = True
     webmcp_testing: bool = False
+    webmcp_read_allowlist: dict[str, dict[str, str]] = Field(default_factory=dict)
+    max_artifact_mb: int = Field(64, ge=4, le=512)
+    max_artifact_file_mb: int = Field(16, ge=1, le=100)
+    artifact_ttl: int = Field(1800, ge=60, le=86400)
+    browser_group: str = "browser"
     max_upload_mb: int = Field(16, ge=1, le=100)
     max_staged_uploads: int = Field(8, ge=1, le=32)
     upload_ttl: int = Field(600, ge=60, le=3600)
@@ -55,6 +60,23 @@ class Settings(BaseSettings):
 
     @model_validator(mode="after")
     def safe_deployment(self):
+        for site, tools in self.webmcp_read_allowlist.items():
+            parsed_site = urlsplit(site)
+            if (
+                parsed_site.scheme not in ("http", "https")
+                or not parsed_site.hostname
+                or parsed_site.path
+                or parsed_site.query
+                or parsed_site.fragment
+                or parsed_site.username
+            ):
+                raise ValueError("WebMCP allowlist keys must be exact origins")
+            if not self.development and parsed_site.scheme != "https":
+                raise ValueError("Production WebMCP allowlist requires HTTPS")
+            if len(tools) > 64 or any(
+                not re.fullmatch(r"[0-9a-f]{64}", digest) for digest in tools.values()
+            ):
+                raise ValueError("WebMCP tool allowlist needs exact SHA-256 schema fingerprints")
         prefix = self.public_path_prefix
         if prefix and (
             not re.fullmatch(r"(?:/[A-Za-z0-9._~-]+)+", prefix)

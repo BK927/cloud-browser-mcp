@@ -72,7 +72,8 @@ def decide(policy, action, meta=None, page_url=""):
         return result(True, "unidentified_target")
     keys = action.get("keys")
     key = keys[0] if typ == "keypress" and isinstance(keys, list) and len(keys) == 1 else None
-    if key in _FOCUS_KEYS:
+    modifiers = set(action.get("modifiers", []))
+    if key in _FOCUS_KEYS and not modifiers - {"SHIFT"}:
         return result(False, "focus_or_escape")
     if _effect(meta.get("name")) or meta.get("download") or meta.get("link_ping"):
         return result(True, "effect_or_transfer_indicator")
@@ -95,11 +96,13 @@ def decide(policy, action, meta=None, page_url=""):
     if (
         typ == "keypress"
         and editable
-        and (key in _EDIT_KEYS or (key == "A" and action.get("modifiers") == ["CONTROL"]))
+        and (
+            (key in _EDIT_KEYS and not modifiers - {"SHIFT", "CONTROL"})
+            or (key in ("A", "Z", "Y") and modifiers == {"CONTROL"})
+        )
     ):
         return result(False, "ordinary_edit_key")
-    # Recognized GET search controls only. General drafts, autosaving settings,
-    # editors, permission checkboxes and POST forms remain approval-gated.
+    # Enter/activation needs stronger evidence than ordinary editing.
     page, destination = _http(page_url), _http(meta.get("form_action"))
     search_form = bool(
         meta.get("search_form")
@@ -124,6 +127,8 @@ def decide(policy, action, meta=None, page_url=""):
     if typ == "keypress" and key in _EDIT_KEYS and search_input:
         return result(False, "search_edit_key")
     if typ == "keypress" and key == "ENTER" and search_form and search_input:
+        if modifiers:
+            return result(True, "modified_submission")
         return result(False, "get_search_submit")
     if (
         typ == "keypress"
@@ -131,9 +136,12 @@ def decide(policy, action, meta=None, page_url=""):
         and meta.get("search_context")
         and editable
         and not meta.get("form_action")
+        and not modifiers
     ):
         return result(False, "structured_search_submit")
     activate = typ in ("click", "double_click") or (typ == "keypress" and key in ("ENTER", "SPACE"))
+    if modifiers:
+        return result(True, "modified_activation")
     if not activate:
         return result(True, "unclassified_edit_or_key")
     if meta.get("submits_form"):

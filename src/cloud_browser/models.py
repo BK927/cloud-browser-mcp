@@ -8,14 +8,30 @@ class StrictModel(BaseModel):
 
 
 class NodeAction(StrictModel):
-    type: Literal["click", "double_click"]
+    type: Literal["click", "double_click", "right_click", "middle_click"]
     node_id: str
+    modifiers: list[Literal["ALT", "CONTROL", "META", "SHIFT"]] = Field(
+        default_factory=list, max_length=4
+    )
 
 
 class FillAction(StrictModel):
     type: Literal["fill"]
     node_id: str
     text: str = Field(max_length=20000)
+
+
+class TypeAction(StrictModel):
+    type: Literal["type"]
+    node_id: str
+    text: str = Field(max_length=2000)
+    interval_ms: int = Field(0, ge=0, le=20)
+
+    @model_validator(mode="after")
+    def bounded_delay(self):
+        if len(self.text) * self.interval_ms > 8000:
+            raise ValueError("Sequential typing delay must total at most 8 seconds")
+        return self
 
 
 class KeyAction(StrictModel):
@@ -35,14 +51,61 @@ class KeyAction(StrictModel):
             "DELETE",
             "HOME",
             "END",
+            "PAGEUP",
+            "PAGEDOWN",
+            "A",
+            "B",
+            "C",
+            "D",
+            "E",
+            "F",
+            "G",
+            "H",
+            "I",
+            "J",
+            "K",
+            "L",
+            "M",
+            "N",
+            "O",
+            "P",
+            "Q",
+            "R",
+            "S",
+            "T",
+            "U",
+            "V",
+            "W",
+            "X",
+            "Y",
+            "Z",
         ]
     ] = Field(min_length=1, max_length=1)
+    modifiers: list[Literal["ALT", "CONTROL", "META", "SHIFT"]] = Field(
+        default_factory=list, max_length=4
+    )
 
 
 class SelectAction(StrictModel):
     type: Literal["select"]
     node_id: str
     value: str = Field(max_length=2000)
+
+
+class MultiSelectAction(StrictModel):
+    type: Literal["select_multiple"]
+    node_id: str
+    values: list[str] = Field(min_length=0, max_length=50)
+
+
+class DragAction(StrictModel):
+    type: Literal["drag"]
+    node_id: str
+    target_node_id: str
+    steps: int = Field(12, ge=2, le=30)
+    modifiers: list[Literal["ALT", "CONTROL", "META", "SHIFT"]] = Field(
+        default_factory=list, max_length=4
+    )
 
 
 class UploadAction(StrictModel):
@@ -81,9 +144,38 @@ Action = Annotated[
     | CheckAction
     | ScrollAction
     | CoordinateAction
-    | UploadAction,
+    | UploadAction
+    | TypeAction
+    | MultiSelectAction
+    | DragAction,
+    # New variants retain the same strict discriminated contract.
     Field(discriminator="type"),
 ]
+
+
+class ObservationQuery(StrictModel):
+    frame_id: str | None = None
+    scope: str | None = Field(None, max_length=1000)
+    selector: str | None = Field(None, max_length=1000)
+    role: str | None = Field(None, max_length=100)
+    name: str | None = Field(None, max_length=500)
+    label: str | None = Field(None, max_length=500)
+    limit: int = Field(60, ge=1, le=100)
+
+
+class WaitCondition(StrictModel):
+    type: Literal["url", "element", "dialog", "download"]
+    value: str | None = Field(None, max_length=2000)
+    query: ObservationQuery | None = None
+    state: Literal["present", "absent", "visible", "hidden", "enabled", "completed"] = "present"
+
+    @model_validator(mode="after")
+    def required_condition(self):
+        if self.type == "url" and not self.value:
+            raise ValueError("URL condition requires an exact URL")
+        if self.type == "element" and not self.query:
+            raise ValueError("Element condition requires a query")
+        return self
 
 
 class Configuration(StrictModel):

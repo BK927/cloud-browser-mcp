@@ -3,6 +3,12 @@
   const nodeBudget = options.lightweight ? 60 : 300;
   const scanBudget = options.lightweight ? 1000 : 10000;
   const textBudget = options.lightweight ? 8000 : 250000;
+  const query = options.query || {};
+  let scope = document, selected = null;
+  try {
+    if (query.scope) scope = document.querySelector(query.scope);
+    if (query.selector) selected = scope ? [...scope.querySelectorAll(query.selector)] : [];
+  } catch (_) { return {data:{query_error:true},elements:[],frame_elements:[]}; }
   // Executed in a CDP isolated world. Never invoke page handlers while observing.
   if (!globalThis.__cloudBrowserState) {
     const state = {mutations: 0};
@@ -57,7 +63,10 @@
     const e = candidates[i];
     if (!known.has(e) && visible(e) && inViewport(e) && scrollable(e)) { all.push(e); known.add(e); }
   }
-  const elements = all.slice(0, nodeBudget);
+  // Scoped CSS queries are read-only and may include non-interactive DOM targets.
+  // The whole document's privacy guard remains in force.
+  const queried = selected || (scope ? all.filter(e => scope === document || scope.contains(e)) : []);
+  const elements = queried.filter(e => visible(e) && inViewport(e) && !sensitive(e)).slice(0, Math.min(nodeBudget,query.limit || nodeBudget));
   const accessibleName = e => {
     const label = e.labels?.[0] ? [...e.labels[0].childNodes].filter(n => n.nodeType === Node.TEXT_NODE).map(n => n.textContent).join(' ') : '';
     const labelledBy = (e.getAttribute('aria-labelledby') || '').split(/\s+/).map(id => document.getElementById(id)?.innerText || '').join(' ');
@@ -148,7 +157,7 @@
   // Rendered text in document order, main/article first, without an AX/DOM duplicate.
   // Stop at bounded work and never read form values or embedded frame documents.
   const main = [...document.querySelectorAll('main,[role=main],article')].find(visible);
-  const root = main || document.body;
+  const root = query.scope ? scope : (selected ? selected[0] : main || document.body);
   let count = 0, chars = 0, textTruncated = false;
   const pieces = [];
   const add = text => {
@@ -216,6 +225,6 @@
       (/automated queries|automated traffic|automation access.*blocked/i.test(bodyText) ? 'bot' : null),
     has_iframe: !!document.querySelector('iframe,frame,object,embed'), iframe_regions: frames,
     has_canvas: !!document.querySelector('canvas,video'),
-    interactive_truncated: all.length > elements.length,
+    interactive_truncated: queried.length > elements.length,
     scroll_scan_truncated: candidates.length > scanBudget}};
 })()

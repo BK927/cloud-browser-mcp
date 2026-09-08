@@ -47,7 +47,18 @@ Do not report unrun installation, isolation or performance tests as passing.
   rejected the new capture keyword arguments. Updated the helper signature and
   re-ran the complete completion/error suite: 12 passed (48.77 s). The production
   post-dispatch uncertainty behavior and assertion remain unchanged.
-- Remaining: stage 3 expanded operations;
+- Stage 2 public commit: `d929d1a04251b2fa4c3d8657bcfa99d44e1e2df2`;
+  exact-commit CI run 34241565720 passed tests and arm64/amd64 build.
+- Stage 3 implemented: scoped observation, sequential/modifier/mouse/drag/multi-
+  select inputs, bounded waits/follow-ups, explicit dialogs, metadata-only logs,
+  work-local clipboard, downloads/exports/private attachment retrieval, intercepted
+  file chooser nodes, operator-pinned WebMCP reads, public URL query/anchors.
+  Full local regression: 389 passed / 4 skipped / 1 upstream warning (271.36 s).
+  Binary download disclosure stays private; console arguments/exception locals
+  are intentionally withheld. Native HTML5 drag-data behavior is not guaranteed.
+  Final edge suite: 16 passed (39.41 s), including exact hidden-file chooser upload,
+  operator-pinned WebMCP allowlist, protected dialog rejection and input release.
+- Remaining:
   stage 4 native/on-demand runtime and deployment-owner Pi comparison.
   No native performance savings have been established. No operational deployment
   has been requested for this intermediate source.

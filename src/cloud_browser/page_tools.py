@@ -1,5 +1,6 @@
 """Native Chromium WebMCP bridge. No page API shims or arbitrary script execution."""
 
+import hashlib
 import json
 import threading
 import time
@@ -9,6 +10,12 @@ from referencing import Registry
 
 from .models import BrowserError
 from .security import SENSITIVE, redact_tree, safe_url
+
+
+def schema_fingerprint(schema):
+    return hashlib.sha256(
+        json.dumps(schema, sort_keys=True, separators=(",", ":"), ensure_ascii=True).encode()
+    ).hexdigest()
 
 
 def scrub_result(value, depth=0):

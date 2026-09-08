@@ -5,7 +5,8 @@
 클라이언트는 `tools/list`를 갱신하고 `browser_open`에서 받은 임대 ID를 보관해야 합니다.
 관찰 문자열의 배치나 고정된 JSON 키 순서를 가정해서는 안 됩니다.
 
-원래 8개 도구 이름을 유지하고 `browser_status`, `browser_configure` 및 선택 WebMCP 2개를 제공합니다.
+원래 8개 도구 이름을 유지하고 status/configure, 선택 WebMCP 2개 및
+wait/dialog/logs/artifacts/clipboard를 더해 17개 도구를 제공합니다.
 MCP SDK의 `tools/list` 입력 schema가 정확한 타입·범위의 기준입니다.
 
 모든 정상 도구 실행 결과는 `status`, `request_id`, `session_id`, `tab_id`, `revision`,
@@ -24,8 +25,8 @@ JSON/schema 자체가 잘못된 요청은 SDK 단계의 표준 MCP 오류이며 
 | open | session_id?, url?, new_tab=true, lease_id? |
 | list_tabs | session_id |
 | navigate | session_id, tab_id, operation=goto/back/forward/reload, url? |
-| observe | session_id, tab_id, mode=auto/semantic/interactive/visual, full_page=false, max_chars?, cursor? |
-| act | session_id, tab_id, expected_revision, action, confirmation_token? |
+| observe | session_id, tab_id, mode=auto/semantic/interactive/visual, full_page=false, max_chars?, cursor?, query? |
+| act | session_id, tab_id, expected_revision, action, confirmation_token?, completion?, completion_timeout_ms?, follow_up? |
 | auth_request | session_id, tab_id, site_origin |
 | handoff | session_id, tab_id, reason |
 | close | session_id, scope=tab/session, tab_id? |
@@ -33,6 +34,11 @@ JSON/schema 자체가 잘못된 요청은 SDK 단계의 표준 MCP 오류이며 
 | configure | session_id, tab_id, configuration |
 | list_page_tools | session_id, tab_id |
 | call_page_tool | session_id, tab_id, revision, tool_name, arguments, confirmation_token? |
+| wait | session_id, tab_id, condition, timeout_ms=5000 |
+| dialog | session_id, tab_id, operation=get/accept/dismiss, dialog_id?, text?, confirmation_token? |
+| logs | session_id, tab_id, after=0, limit=50 |
+| artifacts | session_id, operation=list/get/delete/clear/export, artifact_id?, tab_id?, format=text/html/image |
+| clipboard | session_id, operation=read/write/clear/copy/paste, text?, tab_id?, node_id?, expected_revision?, confirmation_token? |
 
 위 표에서 `open`의 새 세션 생성과 전역 `status`를 제외한 모든 도구는 `lease_id`도
 필수입니다. `act`의 선택적 `operation_id`는 재전송 결과 조회용이며 8..128자입니다.
@@ -72,7 +78,8 @@ screenshot_quality 25..95, max_chars 256..100000, wait_ms 0..10000. 생략한 �
 
 좌표: click_at/double_click_at/move_to/scroll_at. viewport CSS 픽셀 기준이며
 full_page 이미지 ID는 좌표 조작에 사용할 수 없습니다. scroll_at은 delta_x/delta_y를
-추가합니다. 키는 한 번에 한 개의 지정 특수키만 지원하며 임의 키 조합은 노출하지 않습니다.
+추가합니다. 순차 입력·modifier·우클릭·중클릭·드래그·다중 선택과 추가 도구의 정확한
+범위, 보안 제한 및 예시는 [확장 조작 계약](OPERATIONS.md)을 함께 적용합니다.
 
 ## revision·관찰
 
@@ -104,7 +111,8 @@ viewport의 후보가 더 많으면 `interactive_truncated=true`입니다. 화�
 
 select 노드는 최대 200개 option의 label/value/selected/disabled를 제공합니다. 초과는
 `options_truncated=true`입니다. 관찰하지 못했거나 비활성인 옵션을 선택하지 않고, 중복 value는
-NODE_AMBIGUOUS입니다. readonly 입력·radio 직접 해제·multi-select는 명시적으로 거부합니다.
+NODE_AMBIGUOUS입니다. readonly 입력·radio 직접 해제는 명시적으로 거부합니다.
+다중 선택은 `select_multiple`로 관찰한 고유 value만 선택합니다.
 중첩 option 메타데이터에도 토큰 제거를 적용합니다.
 
 일반 overflow 스크롤 영역에도 node_id와 scrollable/scroll 정보를 부여합니다. 후보 탐색은
@@ -128,8 +136,8 @@ mode/예산을 유지하고 이미지는 다시 생성하지 않습니다.
 노드 조작은 부모 프레임 경계를 투영하고 가림을 검사합니다. 프레임 교체·이동·분리 시
 이전 노드는 재검색하지 않습니다. 읽지 못한 프레임은 부분 결과와 이유를 반환합니다.
 
-URL은 최종 목적지를 사용하되 userinfo/query 값/fragment를 마스킹합니다. 원문 URL이
-그대로 필요하다는 이유로 비밀 query를 반환하지 않습니다. 이 마스킹 때문에 `page.url`은
+URL은 최종 목적지를 사용하되 userinfo와 비밀값을 마스킹합니다. 일반 검색·탐색 query 및
+문서 fragment는 보존하고 알 수 없는 query 값과 인증 fragment는 가립니다. `page.url`은
 원문 navigation input으로 다시 사용하기에 적합하지 않을 수 있습니다.
 
 ## 확인·제어

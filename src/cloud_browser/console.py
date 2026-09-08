@@ -5,7 +5,7 @@ import html
 import json
 import secrets
 import time
-from urllib.parse import urlsplit
+from urllib.parse import quote, urlsplit
 
 import websockets
 from fastapi import FastAPI, Request, WebSocket
@@ -134,6 +134,7 @@ def control_app(cfg, auth, service):
                 f"<h2>Exclusive browser work</h2><p>{html.escape(sid)} — reclaim closes all its tabs and ends the work lease.</p>"
                 f"<form method=post action='/sessions/{html.escape(sid, quote=True)}/reclaim'><input type=hidden name=csrf value='{csrf}'>"
                 "<button>Close session and reclaim browser</button></form>"
+                f"<p><a href='/sessions/{html.escape(sid, quote=True)}/artifacts'>This work's downloads and exports</a></p>"
             )
         for item in service.uploads.list():
             blocks.append(
@@ -197,6 +198,42 @@ def control_app(cfg, auth, service):
             f"<form method=post action=/logout><input type=hidden name=csrf value='{csrf}'><button>Sign out</button></form>"
         )
         return HTMLResponse("".join(blocks))
+
+    @app.get("/sessions/{session_id}/artifacts")
+    async def artifacts_index(session_id: str, request: Request):
+        result = await service.call("artifacts", session_id=session_id)
+        if result["status"] != "ok":
+            return JSONResponse({"error": result["error"]}, status_code=409)
+        csrf = html.escape(identity(request.cookies)["csrf"], quote=True)
+        blocks = [
+            "<!doctype html><meta charset=utf-8><h1>Private work artifacts</h1><p>Downloads are untrusted files. No executable preview is provided.</p>"
+        ]
+        for item in result["artifacts"]:
+            blocks.append(
+                f"<p>{html.escape(item['name'])} — {item['state']} — {item['size']} bytes</p>"
+            )
+            if item["state"] == "completed":
+                blocks.append(
+                    f"<form method=post action='/sessions/{html.escape(session_id, quote=True)}/artifacts/{item['artifact_id']}/download'><input type=hidden name=csrf value='{csrf}'><button>Download file to my device</button></form>"
+                )
+        blocks.append("<p><a href='/'>Console</a></p>")
+        return HTMLResponse("".join(blocks))
+
+    @app.post("/sessions/{session_id}/artifacts/{artifact_id}/download")
+    async def artifact_download(session_id: str, artifact_id: str, request: Request):
+        try:
+            await checked_form(request)
+            result = await service.private_download(session_id, artifact_id)
+            return Response(
+                result["bytes"],
+                media_type="application/octet-stream",
+                headers={
+                    "Content-Disposition": "attachment; filename*=UTF-8''"
+                    + quote(result["filename"], safe="")
+                },
+            )
+        except BrowserError as exc:
+            return JSONResponse({"error": exc.code}, status_code=409)
 
     @app.post("/uploads")
     async def upload(request: Request):
