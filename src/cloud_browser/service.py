@@ -330,15 +330,22 @@ class BrowserService:
     async def _serialized_call(self, method, principal, lease_id, **args):
         async with self._command_lock():
             sid, tid = args.get("session_id"), args.get("tab_id")
+            before_sessions = set(self.sessions)
             try:
                 # Recheck after waiting: another opener may have acquired the lease.
                 # Reap timed-out sessions without exposing/observing their pages.
                 for old_sid, state in list(self.sessions.items()):
                     if state["expires"] <= time.time() and not self._lease(old_sid):
                         try:
-                            await self.worker.call("close", session_id=old_sid, scope="session")
-                        except BrowserError:
-                            pass
+                            await self._rpc("close", session_id=old_sid, scope="session")
+                        except BrowserError as exc:
+                            if exc.code == "SESSION_EXPIRED" and old_sid not in self.sessions:
+                                continue  # Verified worker shutdown already invalidated it.
+                            raise BrowserError(
+                                "CLEANUP_REQUIRED",
+                                "Expired work could not be closed; private administrator cleanup is required before another work can start",
+                                "blocked",
+                            ) from exc
                         self.sessions.pop(old_sid, None)
                         self.leases.pop(old_sid, None)
                         self._remember_session(old_sid, "expired", "lease_expired")
@@ -356,6 +363,16 @@ class BrowserService:
                     result["lease_id"] = self.owners[created_sid]["lease_id"]
                 return response(**result)
             except BrowserError as exc:
+                created = set(self.sessions) - before_sessions
+                if method == "open" and not sid and principal is not None and len(created) == 1:
+                    # Even a partial/failed open belongs to its caller, so it can
+                    # inspect or close that exact work without global disclosure.
+                    failed_sid = created.pop()
+                    self.owners[failed_sid] = new_ownership(principal)
+                    self._remember_session(failed_sid, "active", "open_failed")
+                    return self._error_response(exc, failed_sid) | {
+                        "lease_id": self.owners[failed_sid]["lease_id"]
+                    }
                 return self._error_response(exc, sid, tid)
 
     async def _open(self, session_id=None, url=None, new_tab=True):
@@ -1120,11 +1137,14 @@ class BrowserService:
         }
         ids = [session_id] if session_id else list(self.sessions)
         for sid in ids:
-            state = self._session(sid)
+            # Cached status remains available for expired work, especially while
+            # a human still owns authentication/control. Never collect its page.
+            state = self.sessions[sid] if sid in self.sessions else self._session(sid)
             lease = self.leases.get(sid)
             item = {
                 "session_id": sid,
                 "expires_at": iso(state["expires"]),
+                "work_lease_expired": state["expires"] <= time.time(),
                 "result_uncertain": state["uncertain"],
                 "control": self._lease_output(lease) if lease else None,
             }

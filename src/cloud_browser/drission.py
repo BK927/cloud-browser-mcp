@@ -726,8 +726,21 @@ class DrissionAdapter:
                     self.runtime.close()
                 raise
             self.sessions[sid] = {"browser": browser, "tabs": {}, "selected": None}
-            self._start_artifacts(sid)
-            self._sync(sid)
+            try:
+                self._start_artifacts(sid)
+                self._sync(sid)
+            except BaseException:
+                # Initialization failed before exposing this fresh session. Do
+                # not leave a half-initialized browser sharing the display.
+                try:
+                    browser.quit()
+                finally:
+                    partial = self.sessions.pop(sid)
+                    if partial.get("artifacts"):
+                        partial["artifacts"].close()
+                    if not self.sessions:
+                        self.runtime.close()
+                raise
         elif new_tab:
             self.sessions[sid]["browser"].new_tab()
             added = self._sync(sid)

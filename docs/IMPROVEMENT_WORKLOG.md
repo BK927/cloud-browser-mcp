@@ -74,3 +74,25 @@ Do not report unrun installation, isolation or performance tests as passing.
 - Remaining: exact stage 4 regression/CI and deployment-owner Pi comparison.
   No native performance savings have been established. No operational deployment
   has been requested for this intermediate source.
+
+## Stage 4 integration findings
+
+- Actual local public-site checks: W3C accordion direct adapter plus strict and
+  balanced HTTP MCP/worker/private-approval paths, Python documentation reading
+  and 1024x768 image decoding: 3 passed (24.95 s).
+- `ef325bb`: Docker probe found that docker exec does not inherit entrypoint
+  exports. Fixed benchmark to read the exact same-UID/cgroup running API's
+  environment without logging it; the standalone script also supports baseline.
+- `f698aa3` and `c1383a3`: Docker runtime passed. Native startup diagnostics proved
+  the browser HOME and profile writable but an inherited `/home/runner/.config`
+  XDG setting was inaccessible under ProtectHome. A dedicated HOME/-H and profile
+  group umask are retained; the decisive fix clears desktop XDG/Chrome overrides
+  in a root-owned engine wrapper **after sudo/PAM**, shared by both installers.
+- `fe084f7`: actual native runtime job passed, including 1GiB cgroup, authenticated
+  MCP image, shared on-demand display/control, no-new-privileges/seccomp child,
+  worker SIGKILL cleanup/reopen, browser UID control-plane denial and proxy denial
+  of private destinations. These Ubuntu/Chrome CI results are not Pi measurements.
+- Final recovery checks add a caller-owned lease even for a partial failed open,
+  prevent work transfer after failed expiry cleanup, keep cached human-control
+  status available after work expiry, and sweep only expired generated orphan
+  artifacts. Focused recovery suite: 34 passed (2.70 s).
