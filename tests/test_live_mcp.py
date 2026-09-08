@@ -21,7 +21,8 @@ from cloud_browser.server import create_apps
 pytestmark = pytest.mark.browser
 
 
-async def test_live_mcp_approval_roundtrip_and_reading(tmp_path):
+@pytest.mark.parametrize("approval_policy", ["strict", "balanced"])
+async def test_live_mcp_approval_roundtrip_and_reading(tmp_path, approval_policy):
     executable = os.getenv("CB_TEST_CHROMIUM")
     if not executable or os.getenv("CB_TEST_LIVE") != "true":
         pytest.skip("Opt-in: CB_TEST_CHROMIUM and CB_TEST_LIVE=true")
@@ -33,6 +34,7 @@ async def test_live_mcp_approval_roundtrip_and_reading(tmp_path):
         development=True, public_origin=f"http://127.0.0.1:{port}",
         control_origin="http://control.example", data_dir=tmp_path,
         chromium_path=executable, headless=True, browser_proxy="",
+        approval_policy=approval_policy,
     )
     public, control, service, auth = create_apps(cfg)
     auth.store.put("grant", "live-test-grant", {"active": True})
@@ -66,22 +68,28 @@ async def test_live_mcp_approval_roundtrip_and_reading(tmp_path):
                     assert button["expanded"] == "true"
                     action = args | {"expected_revision": observed["revision"], "action": {"type": "click", "node_id": button["node_id"]}}
                     proposal = await call("browser_act", action)
-                    assert proposal["status"] == "confirmation_required"
-                    assert proposal["confirmation"]["destination"] is None
-                    confirm = proposal["confirmation"]["confirmation_token"]
-                    assert (await call("browser_act", action | {"confirmation_token": confirm}))["status"] == "confirmation_required"
-                    review_id = next(iter(service.pending))
-                    async with httpx.AsyncClient(
-                        transport=httpx.ASGITransport(app=control), base_url=cfg.control_origin,
-                        cookies={"cb_control": "test-console-cookie"}, headers={"Origin": cfg.control_origin},
-                    ) as console:
-                        denied = await console.post(f"/approval/{review_id}", data={"csrf": "wrong", "decision": "approve"})
-                        assert denied.status_code == 409
-                        approved = await console.post(f"/approval/{review_id}", data={"csrf": "test-console-csrf", "decision": "approve"})
-                        assert approved.status_code == 303
-                    status = await call("browser_status", {"session_id": args["session_id"]})
-                    assert status["approvals"][0]["state"] == "approved"
-                    acted = await call("browser_act", action | {"confirmation_token": confirm})
+                    if approval_policy == "balanced":
+                        assert proposal["status"] == "ok"
+                        assert proposal["action_policy"]["reason"] == "view_control"
+                        assert not service.pending
+                        acted = proposal
+                    else:
+                        assert proposal["status"] == "confirmation_required"
+                        assert proposal["confirmation"]["destination"] is None
+                        confirm = proposal["confirmation"]["confirmation_token"]
+                        assert (await call("browser_act", action | {"confirmation_token": confirm}))["status"] == "confirmation_required"
+                        review_id = next(iter(service.pending))
+                        async with httpx.AsyncClient(
+                            transport=httpx.ASGITransport(app=control), base_url=cfg.control_origin,
+                            cookies={"cb_control": "test-console-cookie"}, headers={"Origin": cfg.control_origin},
+                        ) as console:
+                            denied = await console.post(f"/approval/{review_id}", data={"csrf": "wrong", "decision": "approve"})
+                            assert denied.status_code == 409
+                            approved = await console.post(f"/approval/{review_id}", data={"csrf": "test-console-csrf", "decision": "approve"})
+                            assert approved.status_code == 303
+                        status = await call("browser_status", {"session_id": args["session_id"]})
+                        assert status["approvals"][0]["state"] == "approved"
+                        acted = await call("browser_act", action | {"confirmation_token": confirm})
                     assert acted["status"] == "ok" and acted["action_result"]["performed"]
                     after = await call("browser_observe", args | {"mode": "interactive", "max_chars": 100000})
                     nodes = [json.loads(line) for line in after["observation"]["interactive_snapshot"].splitlines()]

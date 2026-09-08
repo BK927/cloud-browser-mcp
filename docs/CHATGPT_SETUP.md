@@ -114,8 +114,11 @@ ChatGPT가 도달할 수 있는 HTTPS 주소의 `/mcp`를 지정합니다.
 > W3C 아코디언 예제의 Personal Information 영역을 닫아줘.
 > 클릭 뒤 다시 관찰해서 expanded가 false인지 확인해줘.
 
-현재 승인 정책은 strict-per-action입니다. 평범한 클릭도 비공개 콘솔의 1회 승인이
-필요합니다. ChatGPT가 반환받은 토큰을 단순히 다시 보내는 것만으로는 실행되지 않습니다.
+기본 승인 정책은 strict-per-action입니다. 평범한 클릭도 비공개 콘솔의 1회 승인이
+필요합니다. 운영자가 `CB_APPROVAL_POLICY=balanced`로 설정하면 W3C 아코디언 같은
+식별 가능한 화면 조작과 일반 링크·검색 조작은 별도 승인 없이 수행합니다.
+범위·제한은 [승인 정책](APPROVAL_POLICY.md)을 확인하세요. AI는 정책을 바꿀 수 없습니다.
+승인 대상 행동은 ChatGPT가 반환받은 토큰을 단순히 다시 보내는 것만으로 실행되지 않습니다.
 콘솔 승인 후 원래 행동과 토큰을 재호출하고, browser_status로 pending/approved/denied를
 확인할 수 있습니다. 거절한 토큰은 CONFIRMATION_DENIED입니다. ChatGPT 자체의 도구 확인과
 서버 콘솔 승인은 서로 별개이며, 쓰기 도구를 읽기 전용이라고 표시해서 승인을 숨기지 않습니다.

@@ -13,6 +13,7 @@ import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from .approval import decide
 from .config import Settings
 from .image_privacy import mask_frames
 from .models import BrowserError
@@ -652,6 +653,7 @@ class DrissionAdapter:
                 destination_kind="page_tool",
                 data_sent=list(action["arguments"]),
                 requires_confirmation=True,
+                action_policy=decide(self.cfg.approval_policy, action),
             )
         nid = action.get("node_id")
         meta = None
@@ -774,6 +776,7 @@ class DrissionAdapter:
         ):
             destination = safe_url(meta["form_action"])
             destination_kind = "declared_form"
+        policy = decide(self.cfg.approval_policy, action, meta, state.tab.url)
         return self._result(
             session_id,
             tab_id,
@@ -788,7 +791,8 @@ class DrissionAdapter:
                 {k: v for k, v in item.items() if k != "path"}
                 for item in action.get("_uploads", [])
             ],
-            requires_confirmation=action["type"] not in ("scroll", "scroll_at", "move_to"),
+            requires_confirmation=policy["approval_required"],
+            action_policy=policy,
         )
 
     def act(self, session_id, tab_id, expected_revision, action):

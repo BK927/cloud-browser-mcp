@@ -105,11 +105,17 @@ URL은 최종 목적지를 사용하되 userinfo/query 값/fragment를 마스킹
 
 ## 확인·제어
 
-모든 클릭/입력/키/select/check는 보수적으로 confirmation_required입니다. 콘솔의
+기본 `CB_APPROVAL_POLICY=strict`에서는 모든 클릭/입력/키/select/check가
+confirmation_required입니다. 운영자 선택 `balanced`에서는 일반 HTTP(S) 링크,
+식별된 펼침/접기·탭, 검색 입력·GET 검색 폼 조작, Tab/Escape를 자동 허용합니다.
+좌표 클릭·일반 폼 편집·제출·업로드·페이지 도구·불명확한 행동은 계속 승인 대상입니다.
+자동 허용 및 승인 응답에는 `action_policy`의 모드·판정 이유가 포함됩니다.
+세부 범위와 스크립트 부작용의 한계는 [승인 정책](APPROVAL_POLICY.md)을 참고하세요. 콘솔의
 승인 기록 없이 token만 재전달하면 미실행입니다. 승인과 현재 페이지가 다르면
 CONFIRMATION_STALE. 소비한 토큰은 CONFIRMATION_USED. 거절한 토큰은 CONFIRMATION_DENIED이며
 자동 재요청하지 않습니다. 결과 불명은 RESULT_UNCERTAIN이며 그 세션의 다음 action도
-수동 확인 전까지 차단합니다. 알려진 외부 변경을 확인 없이 허용하는 자동 위험 분류기는 없습니다.
+수동 확인 전까지 차단합니다. `balanced`는 알려진 외부 변경을 허용하는 모드가 아니며,
+페이지 JavaScript의 부작용을 완벽히 증명하는 보안 경계도 아닙니다.
 
 동일 세션·탭·revision·행동의 미완료 승인 요청은 하나로 합칩니다. 실행 전 해당 결합의 소비
 기록도 저장하므로 화면 변화가 없더라도 토큰을 빼고 재호출해 중복 실행할 수 없습니다.

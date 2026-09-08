@@ -1,0 +1,20 @@
+<!doctype html><html lang="en"><meta charset="utf-8"><title>Approval policy fixture</title>
+<style>body{font:16px sans-serif}label{display:block;margin:4px}textarea{height:30px}</style>
+<main>
+<h1>Approval fixture</h1>
+<a href="browser.html">Documentation</a>
+<button type="button" aria-expanded="true" aria-controls="panel" id="view" onclick="const open=this.getAttribute('aria-expanded')==='true';this.setAttribute('aria-expanded',String(!open));document.querySelector('#panel').hidden=open">Personal Information</button>
+<section id="panel">Example content</section>
+<button type="button" id="unknown" onclick="window.writes++">Generic action</button>
+<button type="button" aria-expanded="false" aria-controls="panel" onclick="window.writes++">Delete account</button>
+<label>Draft message <textarea id="draft"></textarea></label>
+<form role="search" method="get" action="approval.html">
+<label>Search <input type="search" name="q" id="search"></label>
+<label>Order <select name="sort"><option value="old">Oldest</option><option value="recent">Recent</option></select></label>
+<label>Images only <input type="checkbox" name="images" value="yes"></label>
+<button type="submit">Search results</button>
+</form>
+<form method="post" action="approval.html" onsubmit="event.preventDefault();window.writes++">
+<label>Display name <input name="name"></label><button type="submit">Save profile</button>
+</form>
+</main><script>window.writes=0;</script></html>

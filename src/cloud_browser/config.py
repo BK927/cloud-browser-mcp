@@ -29,6 +29,7 @@ class Settings(BaseSettings):
     refresh_ttl: int = Field(604800, ge=600, le=2592000)
     session_ttl: int = Field(3600, ge=60)
     approval_ttl: int = Field(120, ge=15, le=600)
+    approval_policy: Literal["strict", "balanced"] = "strict"
     handoff_ttl: int = Field(600, ge=30, le=3600)
     memory_reserve_mb: int = Field(256, ge=32)
     memory_per_tab_mb: int = Field(96, ge=16)

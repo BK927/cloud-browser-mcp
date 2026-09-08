@@ -83,7 +83,35 @@
     const form = e.form;
     const submit = form && ((e.tagName === 'BUTTON' && e.type === 'submit') ||
       (e.tagName === 'INPUT' && ['submit','image'].includes(e.type)));
+    // Policy hints are observed structure, never authority supplied by page text.
+    // No claim that arbitrary page handlers cannot have additional side effects.
+    const controls = normalize(e.getAttribute('aria-controls')).split(' ').filter(Boolean);
+    const controlled = controls.length > 0 && controls.length <= 4 &&
+      controls.every(id => {
+        const target = document.getElementById(id);
+        return target && !target.isContentEditable && !/^(INPUT|TEXTAREA|SELECT|BUTTON|A)$/.test(target.tagName);
+      });
+    const role = e.getAttribute('role');
+    const viewControl = !submit && (
+      (e.tagName === 'SUMMARY' && e.parentElement?.tagName === 'DETAILS') ||
+      (controlled && ['true','false'].includes(e.getAttribute('aria-expanded')))
+    ) ? 'disclosure' : !submit && controlled && role === 'tab' &&
+      controls.every(id => document.getElementById(id).getAttribute('role') === 'tabpanel') ? 'tab' : null;
+    const submitters = form && form.elements.length <= 100 ? [...form.elements].filter(c =>
+      c.type === 'submit' || c.type === 'image') : [];
+    // Enter can activate the default submitter, including its method/action override.
+    // Ambiguous or overridden submission targets are not automatic search forms.
+    const searchForm = !!form && form.elements.length <= 100 && submitters.length <= 1 && (
+      form.getAttribute('role') === 'search' || !!form.closest('search') ||
+      [...form.elements].some(c => c.type === 'search' || c.getAttribute('role') === 'searchbox')
+    ) && [...form.elements].every(c => !sensitive(c) &&
+      !/csrf|token|auth|operation|command|action|method/i.test([c.name,c.id].join(' ')) &&
+      !c.hasAttribute('formaction') && !c.hasAttribute('formmethod') &&
+      !['password','file','email','tel','reset','image'].includes(c.type));
     return {tag: e.tagName.toLowerCase(), type: e.type || '', role: e.getAttribute('role'),
+      view_control: viewControl, search_form: searchForm,
+      search_submitter_name: searchForm && submitters.length ? accessibleName(submitters[0]) : null,
+      download: e.hasAttribute('download'), link_ping: !!normalize(e.getAttribute('ping')),
       name: accessibleName(e),
       value: ('value' in e && e.type !== 'file') ? String(e.value).slice(0, 2000) : null,
       checked: typeof e.checked === 'boolean' ? e.checked : null,

@@ -5,6 +5,7 @@ import secrets
 import time
 from datetime import UTC, datetime
 
+from .approval import PASSIVE_ACTIONS
 from .authentication import MANUAL_METHODS
 from .config import Settings
 from .models import BrowserError, response
@@ -355,6 +356,8 @@ class BrowserService:
                 "expires_at": iso(expires),
                 "control_url": self.cfg.control_origin + "/",
             }
+            if "action_policy" in prepared:
+                confirmation["action_policy"] = prepared["action_policy"]
             self.store.put(
                 "approval", token, {"binding": binding, "state": "pending"}, self.cfg.approval_ttl
             )
@@ -388,13 +391,22 @@ class BrowserService:
                 for key, item in self.pending.items()
                 if item["token"] != confirmation_token
             }
-        return await self._rpc(
+        elif action["type"] not in PASSIVE_ACTIONS:
+            # Balanced actions still get one dispatch per exact binding, including
+            # a no-change result or a lost response. Approval-free is not retry-safe.
+            self.store.put(
+                "execution", binding, {"dispatched": True}, max(86400, self.cfg.session_ttl)
+            )
+        result = await self._rpc(
             "act",
             session_id=session_id,
             tab_id=tab_id,
             expected_revision=expected_revision,
             action=engine_action,
         )
+        if "action_policy" in prepared:
+            result["action_policy"] = prepared["action_policy"]
+        return result
 
     async def approve(self, review_id, approved: bool):
         async with self.lock:
@@ -643,7 +655,9 @@ class BrowserService:
                 "history_policy": "observed-get-only",
                 "duplicate_action_policy": "exact-session-tab-revision-action",
                 "pagination": "revision-bound-complete-nodes",
-                "approval_policy": "strict-per-action",
+                "approval_policy": "strict-per-action"
+                if self.cfg.approval_policy == "strict"
+                else "balanced-v1",
                 "iframe_screenshot_policy": self.cfg.iframe_screenshot_policy,
                 "file_upload_automation": True,
                 "file_upload_scope": "private-staged-files-only",
