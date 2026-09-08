@@ -244,6 +244,8 @@ def browser_rules(config):
 def network_up(config):
     if os.geteuid() != 0:
         raise RuntimeError("Namespace setup requires root")
+    if Path("/proc/self/ns/net").stat().st_ino != Path("/proc/1/ns/net").stat().st_ino:
+        raise RuntimeError("Native namespace setup must begin in the host network namespace")
     existing = [line.split()[0] for line in run("ip", "netns", "list").stdout.splitlines()]
     if config["namespace"] in existing:
         verify_network(config)

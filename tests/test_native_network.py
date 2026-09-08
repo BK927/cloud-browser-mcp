@@ -233,7 +233,15 @@ def test_unprivileged_egress_uses_root_attestation_not_pid1(monkeypatch, cfg, tm
         return SimpleNamespace(stat=lambda: SimpleNamespace(st_ino=value))
 
     monkeypatch.setattr(native, "Path", path)
-    monkeypatch.setattr(native, "marker_path", lambda _: marker)
+    # Model root-owned POSIX metadata; Windows chmod cannot express 0644 and a
+    # non-root pytest runner cannot chown its fixture to root. Real CI also checks
+    # the actual root-created attestation from the unprivileged egress service.
+    attestation = SimpleNamespace(
+        stat=lambda: SimpleNamespace(st_uid=0, st_mode=0o100644),
+        is_symlink=lambda: False,
+        read_text=marker.read_text,
+    )
+    monkeypatch.setattr(native, "marker_path", lambda _: attestation)
     monkeypatch.setattr(native, "verify_host_ready", lambda _: None)
     monkeypatch.setenv("CB_EGRESS_BIND", cfg["host_ip"])
     monkeypatch.setenv("CB_EGRESS_PORT", "3128")
