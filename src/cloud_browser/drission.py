@@ -25,6 +25,7 @@ from .input_driver import NativeInput
 from .models import BrowserError
 from .observation import compact_node, paginate
 from .page_tools import PageTools, schema_fingerprint, scrub_result, validate_arguments
+from .runtime import DisplayRuntime
 from .security import SENSITIVE, TOKEN, origin, redact, redact_tree, safe_url, validate_url
 from .uploads import verify_file
 
@@ -79,6 +80,7 @@ class DrissionAdapter:
         self.Frame = ChromiumFrame
         self.cfg = settings
         self.sessions = {}
+        self.runtime = DisplayRuntime(settings)
 
     def _session(self, sid):
         if sid not in self.sessions:
@@ -688,8 +690,14 @@ class DrissionAdapter:
         sid = session_id
         created = sid not in self.sessions or new_tab
         if sid not in self.sessions:
+            self.runtime.start()
             profile = self.cfg.data_dir / "profiles" / sid
             profile.mkdir(parents=True, exist_ok=True)
+            if os.name == "posix" and not self.cfg.development:
+                import grp
+
+                os.chown(profile, -1, grp.getgrnam(self.cfg.browser_group).gr_gid)
+                profile.chmod(0o2770)
             with socket.socket() as sock:
                 sock.bind(("127.0.0.1", 0))
                 port = sock.getsockname()[1]
@@ -711,7 +719,12 @@ class DrissionAdapter:
             if self.cfg.browser_proxy:
                 options.set_proxy(self.cfg.browser_proxy)
                 options.set_argument("--proxy-bypass-list=<-loopback>")
-            browser = self.Chromium(options)
+            try:
+                browser = self.Chromium(options)
+            except Exception:
+                if not self.sessions:
+                    self.runtime.close()
+                raise
             self.sessions[sid] = {"browser": browser, "tabs": {}, "selected": None}
             self._start_artifacts(sid)
             self._sync(sid)
@@ -1840,6 +1853,7 @@ class DrissionAdapter:
         state = self._tab(session_id, tab_id)
         deadline = time.monotonic() + timeout_ms / 1000
         while True:
+            partial = False
             typ = condition["type"]
             if typ == "dialog":
                 matched = bool(state.events.dialog)
@@ -1858,6 +1872,10 @@ class DrissionAdapter:
                 if typ == "url":
                     matched = state.tab.url == condition["value"]
                 else:
+                    partial = any(
+                        seen["observation"].get(key)
+                        for key in ("truncated", "interactive_truncated", "frame_reading_truncated")
+                    )
                     nodes = [
                         json.loads(line)
                         for line in seen["observation"]["interactive_snapshot"].splitlines()
@@ -1868,14 +1886,19 @@ class DrissionAdapter:
                         else bool(nodes)
                     )
             if condition.get("state") in ("absent", "hidden"):
-                matched = not matched
+                matched = not matched and not partial
             if matched or time.monotonic() >= deadline:
                 return self._cached_result(
                     session_id,
                     tab_id,
                     state,
                     status="ok" if matched else "no_change",
-                    wait={"matched": matched, "timed_out": not matched, "condition": typ},
+                    wait={
+                        "matched": matched,
+                        "timed_out": not matched,
+                        "condition": typ,
+                        "partial": partial,
+                    },
                 )
             time.sleep(min(0.2, max(0, deadline - time.monotonic())))
 
@@ -1927,6 +1950,11 @@ class DrissionAdapter:
 
     def configure(self, session_id, tab_id, options):
         state = self._tab(session_id, tab_id)
+        if self.cfg.managed_display and (
+            options.get("viewport_width", 0) > self.cfg.display_width
+            or options.get("viewport_height", 0) > self.cfg.display_height
+        ):
+            raise BrowserError("INVALID_INPUT", "Viewport exceeds operator display dimensions")
         state.options.update(options)
         self._viewport(state)
         state.fingerprint = ""
@@ -1955,10 +1983,21 @@ class DrissionAdapter:
             current.document_method = None
             current.document_loader = None
             current.history_methods.clear()
+        self.runtime.start_control()
         return {"session_id": session_id, "tab_id": tab_id}
 
     def resume(self, session_id, tab_id, auth_origin=None):
+        self.runtime.stop_control()
         state = self._tab(session_id, tab_id)
+        for current in self._session(session_id)["tabs"].values():
+            if current.pending_input:
+                current.pending_input.release()
+                if current.pending_input.held_key or current.pending_input.held_button:
+                    raise BrowserError(
+                        "INPUT_RELEASE_FAILED",
+                        "Input is still held; finish the open dialog privately",
+                    )
+                current.pending_input = None
         authentication = {
             "authenticated": None,
             "verification": "unverified",
@@ -2025,6 +2064,8 @@ class DrissionAdapter:
             session["browser"].quit()
             session["artifacts"].close()
             del self.sessions[session_id]
+            if not self.sessions:
+                self.runtime.close()
             return {"session_id": session_id}
         state = self._tab(session_id, tab_id)
         self._stop_page_tools(state)
@@ -2032,6 +2073,8 @@ class DrissionAdapter:
             session["browser"].quit()
             session["artifacts"].close()
             del self.sessions[session_id]
+            if not self.sessions:
+                self.runtime.close()
             return {
                 "session_id": session_id,
                 "tab_id": tab_id,
@@ -2051,3 +2094,4 @@ class DrissionAdapter:
             except Exception:
                 pass
         self.sessions.clear()
+        self.runtime.close()

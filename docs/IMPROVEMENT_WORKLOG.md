@@ -58,7 +58,19 @@ Do not report unrun installation, isolation or performance tests as passing.
   are intentionally withheld. Native HTML5 drag-data behavior is not guaranteed.
   Final edge suite: 16 passed (39.41 s), including exact hidden-file chooser upload,
   operator-pinned WebMCP allowlist, protected dialog rejection and input release.
-- Remaining:
-  stage 4 native/on-demand runtime and deployment-owner Pi comparison.
+- Stage 3 public commit: `a9b37688ee59a4098551deaf418bb18dab437e9a`;
+  exact-commit CI run 34244506193 passed tests and arm64/amd64 build.
+- Stage 4 implemented: shared on-demand Xvfb/Chromium/VNC lifetime, protected
+  Xauthority, cross-installation data lock, fixed cgroup-scoped crash cleanup,
+  Debian native installer/update/status/uninstall, dedicated users/netns/egress,
+  protected isolation attestation and exact systemd memory-budget startup gate.
+  Operator environment/customizations and old releases are preserved. Native
+  files do not stop/remove Docker or other MCPs. Added actual Docker/native CI
+  runtime probes and same-cgroup benchmark/PSS sampling tools. CI/Pi execution
+  results for this stage are pending, not inferred from static checks.
+  Local final regression: 402 passed / 4 skipped / 1 upstream warning (284.34 s).
+  Focused native/control safety checks: 15 passed after fixing two test-only
+  platform/assertion-placement mistakes; production assertions were not relaxed.
+- Remaining: exact stage 4 regression/CI and deployment-owner Pi comparison.
   No native performance savings have been established. No operational deployment
   has been requested for this intermediate source.

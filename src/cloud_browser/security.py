@@ -34,7 +34,7 @@ TOKEN = re.compile(
     r"(?:Bearer\s+\S+|eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+|(?:sk-|ghp_|github_pat_)[A-Za-z0-9_-]{15,})"
 )
 SECRET_ASSIGNMENT = re.compile(
-    r"(?i)\b(password|passwd|otp|authorization|cookie|api[_ -]?key|access[_ -]?token|refresh[_ -]?token|secret)\s*[:=]\s*(?:\"[^\"]*\"|'[^']*'|[^\s,;<>]+)"
+    r"(?i)[\"']?\b(password|passwd|otp|authorization|cookie|api[_ -]?key|access[_ -]?token|refresh[_ -]?token|secret)[\"']?\s*[:=]\s*(?:\"(?:\\.|[^\"\\])*\"|'(?:\\.|[^'\\])*'|[^\s,;<>{}\[\]]+)"
 )
 
 

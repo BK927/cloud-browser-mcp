@@ -137,7 +137,10 @@ class EgressProxy:
 async def main():
     proxy = EgressProxy()
     server = await asyncio.start_server(
-        proxy.handle, "0.0.0.0", int(os.environ.get("CB_EGRESS_PORT", "3128")), limit=32768
+        proxy.handle,
+        os.environ.get("CB_EGRESS_BIND", "0.0.0.0"),
+        int(os.environ.get("CB_EGRESS_PORT", "3128")),
+        limit=32768,
     )
     async with server:
         await server.serve_forever()

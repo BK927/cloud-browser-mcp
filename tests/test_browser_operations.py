@@ -94,6 +94,23 @@ def test_scoped_query_wait_and_global_clipboard_rejection(browser):
     assert error.value.code == "POLICY_BLOCKED"
 
 
+def test_wait_does_not_claim_absence_from_partial_frames(browser, monkeypatch):
+    adapter, sid, tid, _ = browser
+    original = adapter.observe
+
+    def partial(*args, **kwargs):
+        value = original(*args, **kwargs)
+        value["observation"]["interactive_snapshot"] = ""
+        value["observation"]["frame_reading_truncated"] = True
+        return value
+
+    monkeypatch.setattr(adapter, "observe", partial)
+    result = adapter.wait(
+        sid, tid, {"type": "element", "query": {"selector": ".missing"}, "state": "absent"}, 0
+    )
+    assert result["wait"]["partial"] and not result["wait"]["matched"]
+
+
 def test_right_middle_and_pointer_drag(browser):
     adapter, sid, tid, _ = browser
     tab = adapter._tab(sid, tid).tab

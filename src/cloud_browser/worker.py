@@ -4,6 +4,7 @@ import asyncio
 import multiprocessing
 import secrets
 import signal
+import subprocess
 
 import psutil
 
@@ -77,8 +78,14 @@ class Worker:
         self.connection = None
         self.lock = asyncio.Lock()
         self.children = []
+        self.cleanup_failed = False
 
     def start(self):
+        if self.cleanup_failed:
+            raise BrowserError(
+                "CLEANUP_FAILED",
+                "Browser cleanup could not be verified; operator must restart this dedicated service",
+            )
         context = multiprocessing.get_context("spawn")
         parent, child = context.Pipe()
         self.process = context.Process(
@@ -142,6 +149,24 @@ class Worker:
             except psutil.Error:
                 pass
         self.children.clear()
+        if self.cfg.browser_cleanup_command and not self.cfg.development:
+            # Fixed operator-installed helper kills only the dedicated browser UID
+            # in this service cgroup, including orphans after a worker crash.
+            try:
+                subprocess.run(
+                    ["sudo", "-n", self.cfg.browser_cleanup_command],
+                    stdin=subprocess.DEVNULL,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    timeout=5,
+                    check=True,
+                )
+            except (OSError, subprocess.SubprocessError) as exc:
+                self.cleanup_failed = True
+                raise BrowserError(
+                    "CLEANUP_FAILED",
+                    "Dedicated browser cleanup failed; operator restart is required",
+                ) from exc
 
     async def shutdown(self):
         if self.process:
@@ -155,5 +180,5 @@ class Worker:
                     self.process.terminate()
                     await asyncio.to_thread(self.process.join, 3)
             self.connection.close()
-            await asyncio.to_thread(self._cleanup_children)
             self.process = None
+            await asyncio.to_thread(self._cleanup_children)

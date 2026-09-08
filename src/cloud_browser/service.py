@@ -851,7 +851,6 @@ class BrowserService:
                 "user_action_required",
             )
         self.clipboards.pop(session_id, None)
-        await self._rpc("focus", session_id=session_id, tab_id=tab_id)
         lease = {
             "handoff_id": "handoff_" + secrets.token_urlsafe(18),
             "session_id": session_id,
@@ -879,6 +878,14 @@ class BrowserService:
                     site_methods_configured=True,
                 )
         self.leases[session_id] = lease
+        try:
+            await self._rpc("focus", session_id=session_id, tab_id=tab_id)
+        except BrowserError as exc:
+            # Focus may already have paused collection or started the private
+            # display. Keep the work locked until the administrator cancels or
+            # completes it; a bridge startup failure is not permission to observe.
+            lease["start_error"] = exc.code
+            raise
         return {
             "status": "user_action_required",
             "session_id": session_id,
@@ -1069,6 +1076,13 @@ class BrowserService:
             "logs": "bounded-metadata-no-console-arguments",
             "clipboard": "work-local-text-only",
             "artifacts": "bounded-work-local-downloads-and-safe-exports",
+            "display_lifecycle": "on-demand" if self.cfg.managed_display else "operator-managed",
+            "control_lifecycle": "on-demand-same-browser"
+            if self.cfg.managed_display
+            else "operator-managed",
+            "installation": "native-systemd"
+            if self.cfg.native_config
+            else "container-or-development",
             "webmcp_read_allowlist": bool(self.cfg.webmcp_read_allowlist),
         }
 

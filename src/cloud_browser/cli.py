@@ -13,6 +13,11 @@ from .diagnostics import doctor_report, self_test
 async def serve(cfg):
     from .server import create_apps
 
+    if cfg.native_config:
+        from .native import verify_runtime
+
+        verify_runtime(cfg)
+
     public, control, _, _ = create_apps(cfg)
     servers = [
         uvicorn.Server(
@@ -38,7 +43,9 @@ async def serve(cfg):
 
 def main():
     parser = argparse.ArgumentParser(description="Personal Cloud Browser MCP")
-    parser.add_argument("command", choices=["serve", "hash-password", "doctor", "self-test", "revoke-all"])
+    parser.add_argument(
+        "command", choices=["serve", "hash-password", "doctor", "self-test", "revoke-all"]
+    )
     parser.add_argument("--chromium", help="Chromium executable for isolated self-test only")
     args = parser.parse_args()
     if args.command == "hash-password":
@@ -65,7 +72,10 @@ def main():
         store.close()
         print("All OAuth grants revoked.")
     else:
-        asyncio.run(serve(cfg))
+        from .runtime import DataLock
+
+        with DataLock(cfg.data_dir):
+            asyncio.run(serve(cfg))
 
 
 if __name__ == "__main__":

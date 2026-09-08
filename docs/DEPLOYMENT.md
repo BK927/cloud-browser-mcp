@@ -1,5 +1,10 @@
 # 설치·접속
 
+이 문서는 Docker 경로입니다. Debian 13의 Docker 없는 추가 경로는
+[네이티브 설치](NATIVE_INSTALL.md), 동일 예산 비교는 [성능 비교](PERFORMANCE_COMPARISON.md)를
+참고하세요. 양쪽 모두 같은 브라우저/계약 코드를 사용하며 새 버전은 세션이 있을 때만
+Xvfb·Chromium, 수동 제어 때만 VNC/중계를 실행합니다.
+
 이 안내는 개인 서버 한 대 기준입니다. Docker/arm64/실제 ChatGPT 연결은 검증 관문이
 남아 있습니다. 실패 시 원인 확인 없이 sandbox·인증·내부망 차단을 끄지 마세요.
 

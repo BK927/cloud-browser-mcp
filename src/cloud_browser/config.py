@@ -44,6 +44,15 @@ class Settings(BaseSettings):
     max_artifact_file_mb: int = Field(16, ge=1, le=100)
     artifact_ttl: int = Field(1800, ge=60, le=86400)
     browser_group: str = "browser"
+    managed_display: bool = False
+    runtime_dir: Path = Path("/run/cloud-browser")
+    display_number: int = Field(99, ge=10, le=999)
+    display_width: int = Field(1920, ge=1024, le=3840)
+    display_height: int = Field(1440, ge=768, le=2160)
+    vnc_port: int = Field(5900, ge=1024, le=65535)
+    vnc_bridge_port: int = Field(6080, ge=1024, le=65535)
+    browser_cleanup_command: str = ""
+    native_config: Path | None = None
     max_upload_mb: int = Field(16, ge=1, le=100)
     max_staged_uploads: int = Field(8, ge=1, le=32)
     upload_ttl: int = Field(600, ge=60, le=3600)

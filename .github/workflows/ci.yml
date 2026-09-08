@@ -28,3 +28,27 @@ jobs:
           target: browser
           platforms: linux/amd64,linux/arm64
           push: false
+  native-runtime:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - run: pip install uv==0.12.9
+      - run: uv sync --frozen --extra dev --extra browser
+      # Uses the actual installer/unit/netns code on a disposable Ubuntu runner;
+      # Debian 13 installation and Pi performance remain separate target gates.
+      - run: sudo --preserve-env=GITHUB_ACTIONS,RUNNER_OS .venv/bin/python scripts/ci_native.py
+  docker-runtime:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - run: pip install uv==0.12.9
+      - run: uv sync --frozen --extra dev --extra browser
+      - run: uv run python scripts/ci_docker.py

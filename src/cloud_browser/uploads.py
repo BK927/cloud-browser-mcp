@@ -146,7 +146,7 @@ class Uploads:
             if os.name == "posix" and not self.cfg.development:
                 import grp
 
-                gid = grp.getgrnam("browser").gr_gid
+                gid = grp.getgrnam(self.cfg.browser_group).gr_gid
                 os.chown(self.root, -1, gid)
                 self.root.chmod(0o750)
                 os.chown(path.parent, -1, gid)

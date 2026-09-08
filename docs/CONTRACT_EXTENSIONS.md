@@ -1,17 +1,19 @@
-# 0.3 확장 계약 — 2026-09-08
+# 확장 계약 — 0.4 작업 임대 계약 반영
 
-기본 10개 도구를 유지하고 선택 WebMCP 도구 2개를 추가한다. 기존 입력은 호환된다.
+현재 17개 도구다. 세션 도구에는 서버가 발급한 `lease_id`가 필수이며 이전 클라이언트는
+도구 스키마를 갱신해야 한다. 현재 입력은 [계약](CONTRACT.md)과 [확장 조작](OPERATIONS.md)을 따른다.
 
 - 폼의 숨김/화면 밖 입력 변화도 revision에 반영한다. 입력 원문은 MCP로 전달하지 않고
   내부 비교용 digest로 즉시 바꾼다. 관찰 한도를 넘는 폼의 자동 조작은 거부한다.
 - 인증 결과는 성공 근거 확인, 사용자 보고 실패, 지원 불가, 확인 미완료를 구분한다.
   사이트별 성공/실패 지표는 운영자가 설정하며 MCP가 변경하지 못한다.
-- iframe은 접근 가능한 동일 출처 문서의 의미 정보만 읽는다. 교차 출처 우회나 내부 좌표
-  조작은 하지 않는다. 민감한 하위 문서는 부모 관찰도 차단한다.
+- CDP로 연결 가능한 동일·교차 출처·중첩·구형 프레임을 제한된 작업량 내에서 읽고
+  실제 backend node로 조작한다. 민감/검사 불가 영역은 이유를 표시하고 안전한 위치에서 마스킹한다.
 - browser_list_page_tools(session_id, tab_id)는 현재 문서의 실제 WebMCP 광고만 반환한다.
   browser_call_page_tool(session_id, tab_id, revision, tool_name, arguments,
-  confirmation_token?)은 동일한 비공개 사용자 승인 절차를 거친다. 페이지의 readOnly 힌트는
-  승인 면제 권한이 아니다. 목록 변경/탐색/인증 중단 이후 예전 목록은 무효다.
+  confirmation_token?, lease_id)은 운영자가 출처·도구·스키마 지문을 읽기용으로 사전
+  허용한 경우 외에는 비공개 승인을 거친다. 페이지의 readOnly 힌트는 승인 권한이 아니다.
+  목록 변경/탐색/인증 중단 이후 예전 목록은 무효다.
 - browser_act에 upload(node_id, upload_ids)를 추가한다. 파일은 사용자가 인증된 비공개
   콘솔에서 준비한 불투명 ID로만 지정한다. 경로/URL/임의 base64 파일을 MCP 입력으로 받지 않는다.
   승인에는 파일명·크기·digest를 표시하며 실제 입력 직전에 동일 파일인지 재검사한다.
@@ -54,7 +56,7 @@ RPC는 IP 목록·페이지 내용·재사용 토큰을 반환하지 않고 사�
 
 사전 DNS 거부·해석 불가는 `INVALID_URL`, 검사 프록시의 중단·미지원 응답·timeout은
 `EGRESS_UNAVAILABLE`이며 탐색은 시작하지 않는다. 직접 연결로 전환하지 않는다.
-native/비격리 실행은 기존 로컬 DNS 검증을 유지한다. 새 MCP 도구·인자·공개 포트는 없다.
+운영 native도 격리 proxy 경로를 사용하며 개발용 비격리 실행만 로컬 DNS 검증을 사용한다.
 open, goto, back/forward의 URL 재검증에 같은 경로를 적용한다. 사이트 자체의 redirect·
 서브리소스·폼 연결도 egress의 실제 연결 검사와 UID 방화벽을 계속 통과해야 한다.
 
@@ -92,7 +94,8 @@ supported_methods가 passkey/security_key뿐이면 시작 시 AUTH_METHOD_UNSUPP
 첫 호출은 미실행이며 비공개 승인 후 같은 요청·토큰으로 재호출한다. 파일 선택 자체가
 change/자동 업로드를 일으킬 수 있으므로 이 단계부터 승인한다. 별도 폼 제출은 별도 승인이다.
 보관 파일 변경·삭제·만료는 이전 승인을 무효화한다. 다중 파일은 multiple 입력에만 허용한다.
-실제로 관찰한 visible file input만 대상으로 삼으며 숨겨진 업로드 위젯은 수동 제어 대상이다.
+관찰한 file input이나 실제 파일 선택기 이벤트가 발급한 정확한 backend input을 대상으로 한다.
+선택자로 숨겨진 다른 입력을 재검색하지 않는다.
 
 기본 한도는 파일당 16MiB, 준비 파일 8개, 600초다. 운영자만 CB_MAX_UPLOAD_MB,
 CB_MAX_STAGED_UPLOADS, CB_UPLOAD_TTL로 변경한다. 정상 종료 또는 다음 목록/준비/입력 요청에서

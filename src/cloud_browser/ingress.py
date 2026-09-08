@@ -7,6 +7,7 @@ an upstream. SSE and authenticated control WebSockets remain end-to-end.
 
 import asyncio
 import contextlib
+import os
 
 
 class FixedRelay:
@@ -79,12 +80,18 @@ class FixedRelay:
 
 
 async def main():
-    relays = [FixedRelay("browser", port) for port in (8000, 8001)]
+    target_host = os.environ.get("CB_INGRESS_TARGET", "browser")
+    relays = [FixedRelay(target_host, port) for port in (8000, 8001)]
+    bind_host = os.environ.get("CB_INGRESS_BIND", "0.0.0.0")
+    listen_ports = [
+        int(os.environ.get("CB_INGRESS_PUBLIC_PORT", "8000")),
+        int(os.environ.get("CB_INGRESS_CONTROL_PORT", "8001")),
+    ]
     servers = []
     try:
-        for relay in relays:
+        for relay, listen_port in zip(relays, listen_ports, strict=True):
             servers.append(
-                await asyncio.start_server(relay.accept, "0.0.0.0", relay.port, limit=65536)
+                await asyncio.start_server(relay.accept, bind_host, listen_port, limit=65536)
             )
         await asyncio.gather(*(server.serve_forever() for server in servers))
     finally:

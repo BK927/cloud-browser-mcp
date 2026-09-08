@@ -8,11 +8,10 @@ MCP입니다. 서버에서 LLM을 실행하지 않으며 모델 API 키가 필�
 [개선 진행 기록](docs/IMPROVEMENT_WORKLOG.md)과 [현재 계약](docs/CONTRACT.md)을 확인하세요.
 아래 배포·검증 기록은 이전 0.3 기준의 기록이며 새 코드의 Pi 검증 완료를 뜻하지 않습니다.
 
-이전 0.3 개발판은 기존 10개 도구에 WebMCP 확장 2개를
-추가했습니다. 폼 상태 결합·안전한 파일 입력·사이트별 인증 확인·동일 출처 iframe 읽기를
-구현했습니다. 패키지 버전은 아직 0.1.0이며, 이번 로컬 변경은 배포 전 작업본입니다.
-로컬 Chromium·MCP·보안 회귀 테스트가 있습니다. 실제 웹 ChatGPT 이미지 인식,
-Debian arm64/amd64 Docker 실행, Raspberry Pi 4B 2GB 실측은 아직 완료하지 않았습니다.
+현재 17개 도구, 작업 독점 임대, balanced-v2 편집, 프레임 조작과 확장 입력·파일 기능을
+구현했습니다. 패키지 버전은 아직 0.1.0입니다. Docker와 Debian 13 네이티브 설치가 같은
+코드를 쓰며 화면/수동 제어 프로세스는 필요한 때만 실행합니다. 로컬·Linux CI 결과와
+실제 Pi/웹 ChatGPT 결과를 구분합니다. 이 개선판의 Pi 3방식 성능 비교는 아직 남아 있습니다.
 운영 투입 전 [통합 검증](docs/VALIDATION.md)을 완료해야 합니다. 공개 SaaS·다중 사용자·
 앱 디렉터리 제출은 범위 밖입니다.
 
@@ -71,6 +70,10 @@ Desktop 경로. 현재 Windows의 별도 Chromium에서 실행을 확인했으�
 4. Funnel과 Serve를 서로 다른 HTTPS 포트에 연결합니다.
 5. 웹 ChatGPT 개발자 모드에서 `/mcp`를 연결하고 최초 이미지 전달을 검증합니다.
 
+Docker 없이 Debian 13 arm64/amd64에 설치하려면 [네이티브 설치](docs/NATIVE_INSTALL.md)를
+사용하세요. 기존 Docker를 제거하거나 영구 전환하지 않습니다.
+[비교 절차](docs/PERFORMANCE_COMPARISON.md)는 세 방식 모두 실제 1GiB 제한을 확인합니다.
+
 서버 배포 가능 여부와 ChatGPT 계정에서 사용자 지정 MCP 기능을 사용할 수 있는지는
 별개입니다. 이 저장소가 사용자를 대신해 공개 접속·ChatGPT 설정을 변경하지는 않습니다.
 
@@ -90,6 +93,11 @@ Desktop 경로. 현재 Windows의 별도 Chromium에서 실행을 확인했으�
 | `browser_configure` | 화면·이미지 품질·출력량·대기 시간 조절 |
 | `browser_list_page_tools` | 현재 문서가 제공하는 네이티브 WebMCP 도구 목록 |
 | `browser_call_page_tool` | 사용자 승인 후 페이지 제공 도구 1회 호출 |
+| `browser_wait` | 제한 시간 내 URL·요소·대화상자·다운로드 조건 대기 |
+| `browser_dialog` | 대화상자 조회·승인된 응답 |
+| `browser_logs` | 비밀값 없는 제한된 실행 진단 메타데이터 |
+| `browser_artifacts` | 작업별 다운로드·안전한 내보내기·정리 |
+| `browser_clipboard` | 작업 전용 텍스트 버퍼, OS 클립보드와 분리 |
 
 초기 화면은 1024×768, JPEG 품질 75입니다. 탭을 3개로 고정하지 않습니다. 호스트와
 cgroup의 메모리 여유를 검사해 `RESOURCE_PRESSURE`를 반환하면 AI가 탭 재사용·정리·
@@ -97,8 +105,10 @@ cgroup의 메모리 여유를 검사해 `RESOURCE_PRESSURE`를 반환하면 AI�
 
 ## 안전 기본값
 
-- 클릭·입력·선택·체크·키 입력은 **매번 비공개 콘솔 승인**을 요구합니다.
-- 토큰 echo만으로는 승인되지 않습니다. 실제 사용자 승인·동일 행동·대상·revision을
+- 기본 `strict`는 조작마다 비공개 승인을 요구합니다. 운영자가 `CB_APPROVAL_POLICY=balanced`를
+  선택하면 balanced-v2의 비민감 입력·선택·체크·편집·일반 링크/검색은 자동 실행됩니다.
+  전송·구매·삭제·권한 변경·민감 입력·효과가 불명확한 실행은 확인을 유지합니다.
+- 토큰 echo만으로는 승인되지 않습니다. 실제 사용자 승인·동일 문서·대상·행동·전송 데이터를
   확인하고 한 번 소비한 뒤 실행합니다.
 - 로그인 중 세션 전체의 DOM·이미지·탭 제목 수집을 중단합니다. 제어 시간이 만료되어도
   자동화를 자동 재개하지 않습니다.

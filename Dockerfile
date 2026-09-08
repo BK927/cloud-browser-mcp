@@ -20,7 +20,7 @@ ENTRYPOINT ["python", "-m", "cloud_browser.ingress"]
 
 FROM base AS browser
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    chromium chromium-sandbox xvfb x11vnc novnc websockify \
+    chromium chromium-sandbox xvfb xauth x11vnc novnc websockify \
     fonts-noto-cjk fonts-liberation iptables iproute2 sudo util-linux tini ca-certificates \
     && rm -rf /var/lib/apt/lists/* \
     && groupadd --gid 1001 browser && useradd --uid 1001 --gid 1001 --create-home browser \
@@ -28,8 +28,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && uv sync --frozen --no-dev --no-editable --extra browser
 COPY deploy/chromium-launcher /usr/local/bin/chromium-launcher
 COPY deploy/entrypoint.sh /usr/local/bin/cloud-browser-entrypoint
+COPY deploy/browser-stop /usr/local/bin/cloud-browser-stop
 COPY deploy/browser.sudoers /etc/sudoers.d/cloud-browser
-RUN chmod 755 /usr/local/bin/chromium-launcher /usr/local/bin/cloud-browser-entrypoint \
+RUN chmod 755 /usr/local/bin/chromium-launcher /usr/local/bin/cloud-browser-entrypoint /usr/local/bin/cloud-browser-stop \
     && chmod 440 /etc/sudoers.d/cloud-browser && visudo -cf /etc/sudoers.d/cloud-browser
 ENV DISPLAY=:99 CB_CHROMIUM_PATH=/usr/local/bin/chromium-launcher CB_DATA_DIR=/data \
     CB_BIND_HOST=0.0.0.0 CB_BROWSER_PROXY=http://egress:3128 CB_HEADLESS=false
