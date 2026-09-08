@@ -13,6 +13,7 @@ import subprocess
 import tempfile
 import time
 import urllib.request
+from contextlib import contextmanager
 from pathlib import Path
 
 PREFIX = Path("/opt/cloud-browser")
@@ -21,6 +22,34 @@ UNITS = Path("/etc/systemd/system")
 CHROMIUM = "/usr/bin/chromium"
 MANAGED = "# Managed by Cloud Browser native installer.\n"
 NAMES = ("cloud-browser-ingress", "cloud-browser", "cloud-browser-egress", "cloud-browser-network")
+
+
+def public_directory(path):
+    """Only installer-owned code/config directories, never credential/data trees."""
+    if path.resolve() != path.absolute():
+        raise RuntimeError(f"Public installation directory cannot contain symlinks: {path}")
+    if not path.parent.exists():
+        public_directory(path.parent)
+    path.mkdir(mode=0o755, exist_ok=True)
+    metadata = path.stat()
+    if metadata.st_uid != os.geteuid() or metadata.st_mode & 0o022:
+        raise RuntimeError(
+            f"Public installation directory must be installer-owned and protected: {path}"
+        )
+    # mkdir's mode is still filtered by the caller's umask. Also repair parent
+    # directories created by an earlier failed 077 install, without a recursive
+    # chmod that might expose operator env, profiles or unrelated old releases.
+    path.chmod(0o755)
+
+
+@contextmanager
+def public_code_creation():
+    """A standalone installer scope for venv/pip/uv's public code, not secrets."""
+    previous = os.umask(0o022)
+    try:
+        yield
+    finally:
+        os.umask(previous)
 
 
 def command(*args, quiet=False, check=True, **kwargs):
@@ -258,7 +287,7 @@ def install(args):
     source = Path(args.source).resolve()
     if not (source / "pyproject.toml").is_file():
         raise RuntimeError("--source must contain this project's checked-out source")
-    ETC.mkdir(mode=0o755, parents=True, exist_ok=True)
+    public_directory(ETC)
     manifest_path = ETC / "install.json"
     previous = json.loads(manifest_path.read_text()) if manifest_path.exists() else {}
     old_cfg = (
@@ -353,6 +382,8 @@ def install(args):
             str(file.relative_to(source)).replace("\\", "/").encode() + b"\0" + file.read_bytes()
         )
     release_id = digest.hexdigest()[:16]
+    public_directory(PREFIX)
+    public_directory(PREFIX / "releases")
     release = PREFIX / "releases" / release_id
     if release.is_symlink():
         raise RuntimeError("Release directory cannot be a symlink")
@@ -366,33 +397,52 @@ def install(args):
         ):
             raise RuntimeError("Existing immutable release differs; preserve and inspect it")
     else:
-        release.mkdir(parents=True, exist_ok=True)
+        public_directory(release)
         for file in files:
             destination = release / file.relative_to(source)
-            destination.parent.mkdir(parents=True, exist_ok=True)
+            public_directory(destination.parent)
             shutil.copyfile(file, destination)
             destination.chmod(0o644)
         write(release / ".source-sha256", digest.hexdigest() + "\n")
     venv = release / ".venv"
-    if not (venv / "bin/python").exists():
-        command("python3", "-m", "venv", venv)
-        command(venv / "bin/pip", "install", "uv==0.12.9", quiet=True)
-    if not (release / ".dependencies-ready").exists():
-        command(
-            venv / "bin/uv",
-            "sync",
-            "--project",
-            release,
-            "--frozen",
-            "--no-dev",
-            "--no-editable",
-            "--extra",
-            "browser",
-            quiet=True,
-            env=os.environ | {"UV_PROJECT_ENVIRONMENT": str(venv)},
-        )
-        write(release / ".dependencies-ready", "locked dependencies installed\n")
+    with public_code_creation():
+        if not (venv / "bin/python").exists():
+            command("python3", "-m", "venv", venv)
+            command(venv / "bin/pip", "install", "uv==0.12.9", quiet=True)
+        if not (release / ".dependencies-ready").exists():
+            command(
+                venv / "bin/uv",
+                "sync",
+                "--project",
+                release,
+                "--frozen",
+                # A root-only wheel cache from a previous 077 install must not
+                # lend unreadable hardlinked files to the public service venv.
+                "--no-cache",
+                "--no-dev",
+                "--no-editable",
+                "--extra",
+                "browser",
+                quiet=True,
+                env=os.environ | {"UV_PROJECT_ENVIRONMENT": str(venv)},
+            )
+            write(release / ".dependencies-ready", "locked dependencies installed\n")
     python = str(venv / "bin/python")
+    # Exercise code import as each service UID before stopping a running native
+    # deployment. A root-only import cannot detect inaccessible venv ancestry.
+    for user in ("cb-api", "cb-browser", "cb-egress", "cb-ingress"):
+        command(
+            "runuser",
+            "-u",
+            user,
+            "--",
+            python,
+            "-I",
+            "-c",
+            "import cloud_browser.cli, cloud_browser.egress, cloud_browser.ingress, DrissionPage",
+            quiet=True,
+            cwd=PREFIX,
+        )
     units = render_units(cfg, python)
     for filename, text in units.items():
         if (UNITS / filename).exists() and filename not in previous.get("unit_sha256", {}):

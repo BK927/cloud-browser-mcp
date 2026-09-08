@@ -23,6 +23,17 @@ sudo python3 scripts/native_install.py status
 심볼릭 링크, 홈/저장소 루트는 가져오거나 덮어쓰지 않습니다. `.env`는 최초에만
 `/etc/cloud-browser/browser.env`로 복사하며 업데이트 때 덮어쓰지 않습니다.
 
+설치기를 `umask 077`에서 실행해도 됩니다. 서비스 계정이 읽는 코드·가상환경 및
+`/etc/cloud-browser` 디렉터리는 root 소유의 공개 읽기/탐색 권한으로 만들지만,
+`browser.env`는 계속 `root:cb-api 0640`, 브라우저 HOME은 `0700`으로 유지합니다.
+의존성 생성 동안만 공개 코드용 umask를 사용하고 원래 값을 복원합니다. 과거의 제한된
+wheel 캐시 권한을 재사용하지 않으며, 서비스 UID별 실제 import를 서비스 중단 전에 검사합니다.
+
+구버전 설치가 `200/CHDIR` 또는 `203/EXEC`로 실패했다면 수정된 checkout으로 update하세요.
+설치기는 소유권을 확인한 공용 상위 디렉터리를 복구하고 새 해시 경로에 가상환경을 만듭니다.
+이전 실패 release·설정·데이터를 재귀적으로 chmod하거나 삭제하지 않습니다. 같은 release를
+재사용할 때도 접근 검사를 통과해야 하며, 임의로 바뀐 권한을 숨긴 채 시작하지 않습니다.
+
 설치만 하면 리스너는 시작하지 않습니다. 포트 충돌·자원 여유·현재 작업 종료를 확인한 뒤:
 
 ```sh
@@ -99,7 +110,8 @@ sudo python3 scripts/native_install.py uninstall
 
 ## 검증 범위
 
-Linux CI는 실제 unit/netns/UID 차단, MCP 이미지, on-demand 화면/수동 제어, worker 강제
+Linux CI는 `umask 077`의 신규 설치·동일 release 업데이트와 자격증명 접근 차단,
+실제 unit/netns/UID 차단, MCP 이미지, on-demand 화면/수동 제어, worker 강제
 종료 후 회수를 검사합니다. Ubuntu CI의 Google Chrome 검증은 Debian 설치나 Pi 실측을
 대체하지 않습니다. [동일 예산 비교 절차](PERFORMANCE_COMPARISON.md)를 따르고 절감이
 없거나 실패한 경우도 그대로 기록하세요.

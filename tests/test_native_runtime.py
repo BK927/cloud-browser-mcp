@@ -1,4 +1,5 @@
 import importlib.util
+import os
 from pathlib import Path
 
 import pytest
@@ -125,3 +126,73 @@ def test_memory_sampler_ignores_smaps_address_header(tmp_path):
     source = tmp_path / "smaps_rollup"
     source.write_text("7f0-7f1 ---p 00000000 00:00 0 [rollup]\nRss: 42 kB\nPss: 31 kB\n")
     assert module.counters(source, kib=True) == {"Rss": 42 * 1024, "Pss": 31 * 1024}
+
+
+@pytest.mark.skipif(os.name != "posix", reason="POSIX directory and umask semantics")
+def test_native_public_paths_repair_077_ancestors_without_exposing_secrets(tmp_path):
+    module = installer()
+    previous = os.umask(0o077)
+    try:
+        prefix = tmp_path / "opt" / "cloud-browser"
+        prefix.mkdir(parents=True)
+        private = prefix / "operator-private"
+        private.mkdir()
+        credential = private / "browser.env"
+        module.write(credential, "fixture-not-a-real-secret\n", 0o640)
+        module.public_directory(prefix)
+        target = prefix / "releases" / "fixture" / "src" / "cloud_browser"
+        module.public_directory(target)
+        etc = tmp_path / "etc" / "cloud-browser"
+        module.public_directory(etc)
+        assert all(
+            path.stat().st_mode & 0o777 == 0o755
+            for path in (prefix, target, target.parent, target.parent.parent, etc)
+        )
+        assert private.stat().st_mode & 0o777 == 0o700
+        assert credential.stat().st_mode & 0o777 == 0o640
+        probe = tmp_path / "still-private"
+        probe.mkdir()
+        assert probe.stat().st_mode & 0o777 == 0o700
+    finally:
+        os.umask(previous)
+
+
+@pytest.mark.skipif(os.name != "posix", reason="POSIX directory and umask semantics")
+@pytest.mark.parametrize("fail", [False, True])
+def test_public_code_umask_restored_after_success_or_failure(tmp_path, fail):
+    module = installer()
+    previous = os.umask(0o077)
+    try:
+        try:
+            with module.public_code_creation():
+                public = tmp_path / "venv"
+                public.mkdir()
+                (public / "module.py").write_text("# fixture\n")
+                if fail:
+                    raise RuntimeError("fixture")
+        except RuntimeError:
+            assert fail
+        assert public.stat().st_mode & 0o777 == 0o755
+        assert (public / "module.py").stat().st_mode & 0o777 == 0o644
+        private = tmp_path / "private"
+        private.mkdir()
+        assert private.stat().st_mode & 0o777 == 0o700
+    finally:
+        os.umask(previous)
+
+
+@pytest.mark.skipif(os.name != "posix", reason="POSIX directory and umask semantics")
+def test_public_directory_rejects_symlink_and_writable_tree(tmp_path):
+    module = installer()
+    private = tmp_path / "private"
+    private.mkdir(mode=0o700)
+    alias = tmp_path / "alias"
+    alias.symlink_to(private, target_is_directory=True)
+    with pytest.raises(RuntimeError, match="symlinks"):
+        module.public_directory(alias / "child")
+    assert private.stat().st_mode & 0o777 == 0o700
+    writable = tmp_path / "writable"
+    writable.mkdir()
+    writable.chmod(0o777)
+    with pytest.raises(RuntimeError, match="protected"):
+        module.public_directory(writable)

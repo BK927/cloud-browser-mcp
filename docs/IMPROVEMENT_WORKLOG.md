@@ -96,3 +96,25 @@ Do not report unrun installation, isolation or performance tests as passing.
   prevent work transfer after failed expiry cleanup, keep cached human-control
   status available after work expiry, and sweep only expired generated orphan
   artifacts. Focused recovery suite: 34 passed (2.70 s).
+
+## Pi native-install permission finding (2026-09-09)
+
+- Deployment-owner comparison of `9f5a21f` completed one baseline Docker run and
+  one improved Docker run, but native startup failed before measurement. This is
+  not a completed nine-run comparison and proves no native memory savings.
+- Evidence: the conservative controller umask `0077` left `/opt/cloud-browser`,
+  its release/venv ancestry, and `/etc/cloud-browser` at root-only `0700`.
+  systemd reported `200/CHDIR` and `203/EXEC`. `browser.env` itself correctly
+  retained `root:cb-api 0640`; its parent was the blocking boundary.
+- The deployment owner restored the original containers, images, environment,
+  routes and healthy OAuth connection; other MCPs remained intact. Failed native
+  installation and partial measurement evidence were preserved, not chmod'd in
+  place to bypass the installer defect.
+- Repair explicitly creates protected public code/config directories, confines
+  `0022` to dependency creation (restoring the caller umask even on failure),
+  avoids importing permissions through an old wheel cache, and checks imports
+  as all four service users before stopping an existing native service. It does
+  not recursively relax previous releases, credentials, database or profiles.
+- Regression coverage adds POSIX mode/symlink/failure tests and real CI native
+  install plus same-release update under `0077`, with negative credential access
+  checks. Exact repair-commit CI and a fresh Pi comparison remain required.

@@ -30,6 +30,9 @@ def main():
     for name in installer.NAMES:
         if (installer.UNITS / (name + ".service")).exists():
             raise RuntimeError("CI unit name is already owned")
+    # Reproduce a conservative operator/controller umask throughout installation,
+    # including the existing-prefix case created by the diagnostic engine below.
+    os.umask(0o077)
     source = Path(__file__).resolve().parents[1]
     environment = Path("/run/cloud-browser-ci.env")
     installer.write(
@@ -109,6 +112,27 @@ os.execv("/usr/bin/google-chrome", ["/usr/bin/google-chrome", *sys.argv[1:]])
         installer.install(args)
         release = Path(json.loads((installer.ETC / "install.json").read_text())["release"])
         python = str(release / ".venv/bin/python")
+        for path in (installer.PREFIX, installer.PREFIX / "releases", release, installer.ETC):
+            assert path.stat().st_mode & 0o777 == 0o755, path
+        assert (installer.ETC / "browser.env").stat().st_mode & 0o777 == 0o640
+        assert (Path(args.data_dir) / "browser-home").stat().st_mode & 0o777 == 0o700
+        assert (Path(args.data_dir) / "profiles").stat().st_mode & 0o7777 == 0o2770
+        # Unrelated service UIDs may import public code, not read credentials or
+        # list browser-private data. Do not print the fixture's credential bytes.
+        for user in ("cb-browser", "cb-egress", "cb-ingress"):
+            original_command(
+                "runuser",
+                "-u",
+                user,
+                "--",
+                python,
+                "-I",
+                "-c",
+                "import os; assert not os.access('/etc/cloud-browser/browser.env', os.R_OK)",
+            )
+        # Prove the same immutable venv is usable on a repeat update as well.
+        installer.install(args)
+        assert json.loads((installer.ETC / "install.json").read_text())["release"] == str(release)
         original_command(
             python,
             "-I",
@@ -165,6 +189,7 @@ os.execv("/usr/bin/google-chrome", ["/usr/bin/google-chrome", *sys.argv[1:]])
                     "native_runtime_smoke": "passed",
                     "platform": "Ubuntu CI with Google Chrome; not a Debian/Pi performance result",
                     "budget_mib": 1024,
+                    "installer_umask": "0077; fresh install and same-release update",
                 }
             )
         )
