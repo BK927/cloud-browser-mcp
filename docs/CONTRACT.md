@@ -1,8 +1,9 @@
-# 외부 계약 0.3 초안
+# 외부 계약 0.4 초안
 
-패키지의 배포 버전과 별개인 개발 중 외부 계약입니다. 기존 10개 도구 이름과 입력을
-유지합니다. 0.1 클라이언트는 추가 응답 필드를 무시할 수 있지만, 관찰 문자열의 구체적인
-배치나 고정된 JSON 키 순서를 가정해서는 안 됩니다.
+패키지의 배포 버전과 별개인 개발 중 외부 계약입니다. 기존 도구 이름은 유지하지만
+0.4는 작업 격리를 위해 **세션 호출에 `lease_id`를 요구하는 호환성 변경**입니다.
+클라이언트는 `tools/list`를 갱신하고 `browser_open`에서 받은 임대 ID를 보관해야 합니다.
+관찰 문자열의 배치나 고정된 JSON 키 순서를 가정해서는 안 됩니다.
 
 원래 8개 도구 이름을 유지하고 `browser_status`, `browser_configure` 및 선택 WebMCP 2개를 제공합니다.
 MCP SDK의 `tools/list` 입력 schema가 정확한 타입·범위의 기준입니다.
@@ -20,7 +21,7 @@ JSON/schema 자체가 잘못된 요청은 SDK 단계의 표준 MCP 오류이며 
 
 | 도구 | 입력 |
 |---|---|
-| open | session_id?, url?, new_tab=true |
+| open | session_id?, url?, new_tab=true, lease_id? |
 | list_tabs | session_id |
 | navigate | session_id, tab_id, operation=goto/back/forward/reload, url? |
 | observe | session_id, tab_id, mode=auto/semantic/interactive/visual, full_page=false, max_chars?, cursor? |
@@ -28,10 +29,27 @@ JSON/schema 자체가 잘못된 요청은 SDK 단계의 표준 MCP 오류이며 
 | auth_request | session_id, tab_id, site_origin |
 | handoff | session_id, tab_id, reason |
 | close | session_id, scope=tab/session, tab_id? |
-| status | session_id?（생략하면 모든 활성 세션） |
+| status | session_id?, lease_id?, operation_id? (임대 미제공 시 사용 중 여부·자원만) |
 | configure | session_id, tab_id, configuration |
 | list_page_tools | session_id, tab_id |
 | call_page_tool | session_id, tab_id, revision, tool_name, arguments, confirmation_token? |
+
+위 표에서 `open`의 새 세션 생성과 전역 `status`를 제외한 모든 도구는 `lease_id`도
+필수입니다. `act`의 선택적 `operation_id`는 재전송 결과 조회용이며 8..128자입니다.
+다른 작업은 `BROWSER_BUSY`를 받고 기존 작업의 URL·승인·파일은 공개되지 않습니다.
+같은 OAuth 연결이 같은 대화를 뜻하지 않습니다. 임대 ID를 다른 작업에 넘기지 마세요.
+분실한 임대는 비공개 콘솔에서 해당 세션을 닫아 회수합니다.
+
+`status`의 탭은 `tabs_cached: true` 및 `tabs_observed_at`을 갖는 최근 확인 결과입니다.
+최신 탭 목록이 필요하면 `list_tabs`를 사용합니다. 진행 중 행동이 있어도 `status`는
+브라우저 IPC를 기다리지 않습니다. 같은 `operation_id`와 인자의 재전송은 완료 결과를
+`replayed: true`로 반환하거나 진행 상태를 반환합니다. 다른 인자는 `OPERATION_CONFLICT`입니다.
+결과 보관은 메모리 내 최대 128건이며 서버 재시작 후 복원하지 않습니다. 행동의 영속
+중복 방지 기록은 별도로 유지합니다. 이미지 바이트는 결과 캐시에 보관하지 않습니다.
+HTTP 취소는 이미 전달된 행동을 취소하지 않습니다. `RESULT_UNCERTAIN`은 재실행하지 않습니다.
+최초 open 응답을 잃어 임대 ID를 모르면 임대를 추측하거나 다른 작업에 공유하지 말고
+비공개 콘솔에서 세션을 회수합니다. 승인 토큰을 추가한 재호출은 다른 인자이므로 새
+`operation_id`를 사용합니다. 같은 전송의 재시도에만 기존 ID를 그대로 사용합니다.
 
 `configuration`: viewport_width 320..1920, viewport_height 240..1440 (둘을 함께 지정),
 screenshot_quality 25..95, max_chars 256..100000, wait_ms 0..10000. 생략한 값은 유지합니다.
@@ -60,14 +78,18 @@ full_page 이미지 ID는 좌표 조작에 사용할 수 없습니다. scroll_at
 
 노드는 관찰한 실제 CDP backend ID에 연결합니다. 페이지 스크립트와 분리된 CDP isolated
 world의 MutationObserver로 DOM 변경도 감지합니다. 현재 페이지에서 텍스트/선택자로
-재검색하지 않습니다. 텍스트·노드 정체성/상태/위치·스크롤·뷰포트 변경이 발견되면
-revision을 올리고 이전 node/screenshot/cursor를 폐기합니다. 구성 변경·제어권 반환도
-새 revision을 발급합니다. 움직이는 이미지에 대해서는 좌표 전 픽셀 digest도 비교합니다.
+재검색하지 않습니다. 페이지 관찰 revision과 대상의 유효성은 별개입니다. 같은 문서에서
+대상의 의미·입력 상태·소속 폼 데이터가 유지되면 광고 갱신 후에도 실제 backend 노드의
+ID를 유지합니다. 대상 교체는 `STALE_NODE`, 이전 문서의 revision은 `STALE_REVISION`입니다.
+페이지 스크롤은 같은 문서의 최근 256개 revision을 허용합니다. 커서는 여전히 관찰 revision에
+묶입니다. 좌표는 화면 검사도 통과해야 하며 DOM 승인 거절의 우회 수단이 아닙니다.
+마지막 탭을 닫으면 `session_closed: true`, `termination_reason: last_tab_closed`를 반환하며
+후속 호출은 `SESSION_CLOSED`입니다. 정상 종료를 브라우저 크래시로 보고하지 않습니다.
 
 semantic은 화면에 렌더링된 DOM을 문서 순서로 읽으며 main/article을 우선합니다.
 제목·목록·표의 간단한 구조를 보존하고 메뉴/푸터와 접근성 트리의 중복을 줄입니다.
 `semantic_source`는 선택한 본문 종류, `semantic_source_truncated`는 내부 수집 한도 도달을
-표시합니다. 본문 내부 한도는 250000자/탐색 노드 30000개이며, 이 한도 초과 부분은 cursor로
+표시합니다. 본문 내부 한도는 250000자/탐색 노드 10000개이며, 이 한도 초과 부분은 cursor로
 복원되지 않습니다. 이는 원문 전체 보존이나 모든 웹사이트의 완벽한 본문 추출을 보장하지 않습니다.
 
 interactive는 현재 viewport의 조작 요소를 담은 **완전한 JSON Lines**입니다. 빈 기본값을

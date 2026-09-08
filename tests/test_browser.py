@@ -98,7 +98,7 @@ def test_real_stale_replaced_dom_and_screenshot(browser):
     state.tab.run_js(
         "document.querySelector('#accordion').outerHTML=document.querySelector('#accordion').outerHTML"
     )
-    with pytest.raises(BrowserError, match="Page changed"):
+    with pytest.raises(BrowserError, match="target changed"):
         adapter.act(sid, tid, obs["revision"], {"type": "click", "node_id": target["node_id"]})
     shot = adapter.observe(sid, tid, mode="visual")
     assert shot["_image"]["mimeType"] == "image/jpeg"

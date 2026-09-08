@@ -53,10 +53,16 @@ async def test_live_mcp_approval_roundtrip_and_reading(tmp_path, approval_policy
             async with streamable_http_client(cfg.resource, http_client=http) as streams:
                 async with ClientSession(*streams) as client:
                     await client.initialize()
+                    lease_id = None
 
                     async def call(name, arguments):
+                        nonlocal lease_id
+                        if lease_id and arguments.get("session_id"):
+                            arguments = arguments | {"lease_id": lease_id}
                         result = (await client.call_tool(name, arguments)).structured_content
                         assert result is not None
+                        if result.get("lease_id"):
+                            lease_id = result["lease_id"]
                         return result
 
                     opened = await call("browser_open", {"url": "https://www.w3.org/WAI/ARIA/apg/patterns/accordion/examples/accordion/"})
@@ -102,7 +108,7 @@ async def test_live_mcp_approval_roundtrip_and_reading(tmp_path, approval_policy
                     assert read["observation"]["semantic_snapshot"]
                     assert read["observation"]["interactive_snapshot"]
                     assert "StaticText" not in read["observation"]["semantic_snapshot"]
-                    image_result = await client.call_tool("browser_observe", docs_args | {"mode": "visual"})
+                    image_result = await client.call_tool("browser_observe", docs_args | {"mode": "visual", "lease_id": lease_id})
                     image = next(item for item in image_result.content if item.type == "image")
                     assert Image.open(io.BytesIO(base64.b64decode(image.data))).size == (1024, 768)
                     closed = await call("browser_close", {"session_id": args["session_id"], "scope": "session"})

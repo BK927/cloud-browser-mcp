@@ -220,7 +220,7 @@ async def test_real_http_root_and_stripped_prefix_registry_and_oauth_match(cfg, 
                                 await session.call_tool("browser_open", {})
                             ).structured_content
                             assert opened["status"] == "ok"
-                            target = {key: opened[key] for key in ("session_id", "tab_id")}
+                            target = {key: opened[key] for key in ("session_id", "tab_id", "lease_id")}
                             observed = await session.call_tool(
                                 "browser_observe", target | {"mode": "visual"}
                             )
@@ -228,7 +228,7 @@ async def test_real_http_root_and_stripped_prefix_registry_and_oauth_match(cfg, 
                             assert any(item.type == "image" for item in observed.content)
                             closed = await session.call_tool(
                                 "browser_close",
-                                {"session_id": target["session_id"], "scope": "session"},
+                                {"session_id": target["session_id"], "lease_id": target["lease_id"], "scope": "session"},
                             )
                             assert closed.structured_content["status"] == "ok"
                 refresh = {

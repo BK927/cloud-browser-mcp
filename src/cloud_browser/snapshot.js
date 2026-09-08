@@ -1,4 +1,8 @@
 (() => {
+  const options = globalThis.__cbOptions || {};
+  const nodeBudget = options.lightweight ? 60 : 300;
+  const scanBudget = options.lightweight ? 1000 : 10000;
+  const textBudget = options.lightweight ? 8000 : 250000;
   // Executed in a CDP isolated world. Never invoke page handlers while observing.
   if (!globalThis.__cloudBrowserState) {
     const state = {mutations: 0};
@@ -67,16 +71,27 @@
     .filter(e => visible(e) && inViewport(e) && !sensitive(e));
   // Include ordinary div-based scroll panes, without an unbounded layout scan.
   const candidates = document.querySelectorAll('*');
-  for (let i = 0; i < Math.min(candidates.length, 30000); i++) {
+  const known = new Set(all);
+  for (let i = 0; i < Math.min(candidates.length, scanBudget); i++) {
     const e = candidates[i];
-    if (!all.includes(e) && visible(e) && inViewport(e) && scrollable(e)) all.push(e);
+    if (!known.has(e) && visible(e) && inViewport(e) && scrollable(e)) { all.push(e); known.add(e); }
   }
-  const elements = all.slice(0, 300);
+  const elements = all.slice(0, nodeBudget);
   const accessibleName = e => {
     const label = e.labels?.[0] ? [...e.labels[0].childNodes].filter(n => n.nodeType === Node.TEXT_NODE).map(n => n.textContent).join(' ') : '';
     const labelledBy = (e.getAttribute('aria-labelledby') || '').split(/\s+/).map(id => document.getElementById(id)?.innerText || '').join(' ');
     return normalize(e.getAttribute('aria-label') || normalize(labelledBy) || label || e.innerText ||
       e.querySelector('img[alt]')?.alt || e.getAttribute('title') || e.placeholder || '').slice(0, 500);
+  };
+  const formIds = new Map(), ownForms = [];
+  const formId = form => {
+    if (!form || protectedPage || !formStateComplete) return null;
+    if (!formIds.has(form)) {
+      formIds.set(form, ownForms.length);
+      ownForms.push([...form.elements].slice(0,1000).map(c =>
+        [c.name,c.type,c.disabled,c.checked,c.type === 'file' ? [...c.files].map(f => [f.name,f.size,f.lastModified]) : String(c.value || '')]));
+    }
+    return formIds.get(form);
   };
   const nodes = elements.map(e => {
     const r = e.getBoundingClientRect();
@@ -114,6 +129,7 @@
       download: e.hasAttribute('download'), link_ping: !!normalize(e.getAttribute('ping')),
       name: accessibleName(e),
       value: ('value' in e && e.type !== 'file') ? String(e.value).slice(0, 2000) : null,
+      _own_value: formStateComplete && 'value' in e && e.type !== 'file' ? String(e.value) : null,
       checked: typeof e.checked === 'boolean' ? e.checked : null,
       expanded: e.tagName === 'SUMMARY' ? String(!!e.parentElement?.open) : e.getAttribute('aria-expanded'),
       disabled: e.matches(':disabled') || e.getAttribute('aria-disabled') === 'true',
@@ -137,6 +153,7 @@
         (!['checkbox','radio'].includes(c.type) || c.checked)).slice(0, 100).map(c =>
           normalize(c.getAttribute('aria-label') || c.labels?.[0]?.innerText || c.name).slice(0, 200)) : [],
       form_fields_truncated: !!form && form.elements.length > 100,
+      _form_index: formId(form),
       submits_form: !!submit};
   });
 
@@ -147,8 +164,8 @@
   let count = 0, chars = 0, textTruncated = false;
   const pieces = [];
   const add = text => {
-    if (chars >= 250000) { textTruncated = true; return; }
-    const part = text.slice(0, 250000 - chars);
+    if (chars >= textBudget) { textTruncated = true; return; }
+    const part = text.slice(0, textBudget - chars);
     pieces.push(part); chars += part.length;
     if (part.length < text.length) textTruncated = true;
   };
@@ -156,7 +173,7 @@
   const block = /^(P|DIV|SECTION|ARTICLE|MAIN|HEADER|FOOTER|ASIDE|NAV|UL|OL|LI|TABLE|TR|BLOCKQUOTE|PRE|DL|DT|DD|FIGURE|FIGCAPTION|FORM)$/;
   const walk = e => {
     if (!e || textTruncated) return;
-    if (++count > 30000) { textTruncated = true; return; }
+    if (++count > scanBudget) { textTruncated = true; return; }
     if (e.nodeType === Node.TEXT_NODE) {
       const text = normalize(e.textContent);
       if (text) add(text + ' ');
@@ -179,7 +196,7 @@
     if (/^(TD|TH)$/.test(e.tagName)) add(' | ');
     if (heading || block.test(e.tagName)) add('\n');
   };
-  if (!protectedPage) walk(root);
+  if (!protectedPage && !['interactive','visual'].includes(options.mode)) walk(root);
   const semanticText = (pieces.join('') + (!protectedPage && frameTexts.length ? '\n' + frameTexts.join('\n') : ''))
     .replace(/[ \t]+\n/g, '\n').replace(/\n{3,}/g, '\n\n').trim();
 
@@ -197,7 +214,7 @@
   });
   const bodyText = document.body?.innerText || '';
   return {elements, data: {url: location.href, title: document.title,
-    _form_states: formStates, form_state_complete: formStateComplete,
+    _form_states: formStates, _forms: ownForms, form_state_complete: formStateComplete,
     readable_frames: frameDocuments.size - 1, frame_reading_truncated: frameIncomplete,
     text: protectedPage ? '' : bodyText.slice(0, 250000),
     semantic_text: semanticText, semantic_source: main ? main.tagName.toLowerCase() : 'body',
@@ -210,5 +227,5 @@
     has_iframe: !!document.querySelector('iframe,object,embed'), iframe_regions: frames,
     has_canvas: !!document.querySelector('canvas,video'),
     interactive_truncated: all.length > elements.length,
-    scroll_scan_truncated: candidates.length > 30000}};
+    scroll_scan_truncated: candidates.length > scanBudget}};
 })()

@@ -129,6 +129,12 @@ def control_app(cfg, auth, service):
             f"<form method=post action='/uploads' enctype='multipart/form-data'><input type=hidden name=csrf value='{csrf}'>"
             f"<input type=file name=file required><button>Prepare file (maximum {cfg.max_upload_mb} MB)</button></form>"
         )
+        for sid in list(service.sessions):
+            blocks.append(
+                f"<h2>Exclusive browser work</h2><p>{html.escape(sid)} — reclaim closes all its tabs and ends the work lease.</p>"
+                f"<form method=post action='/sessions/{html.escape(sid, quote=True)}/reclaim'><input type=hidden name=csrf value='{csrf}'>"
+                "<button>Close session and reclaim browser</button></form>"
+            )
         for item in service.uploads.list():
             blocks.append(
                 f"<p>{html.escape(item['display_name'])} ({item['size']} bytes)</p>"
@@ -276,6 +282,15 @@ def control_app(cfg, auth, service):
         try:
             await checked_form(request)
             await service.cancel_handoff(handoff_id)
+            return RedirectResponse("/", status_code=303)
+        except BrowserError as exc:
+            return JSONResponse({"error": exc.code}, status_code=409)
+
+    @app.post("/sessions/{session_id}/reclaim")
+    async def reclaim(session_id: str, request: Request):
+        try:
+            await checked_form(request)
+            await service.reclaim_session(session_id)
             return RedirectResponse("/", status_code=303)
         except BrowserError as exc:
             return JSONResponse({"error": exc.code}, status_code=409)

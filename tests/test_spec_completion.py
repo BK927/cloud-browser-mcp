@@ -37,7 +37,7 @@ async def test_completed_binding_cannot_be_reproposed_when_page_does_not_change(
     await service.approve(next(iter(service.pending)), True)
     assert (await service.call("act", **args, confirmation_token=token))["status"] == "no_change"
     repeated = await service.call("act", **args)
-    assert repeated["error"]["code"] == "CONFIRMATION_USED"
+    assert repeated["error"]["code"] == "ACTION_ALREADY_DISPATCHED"
     assert service.worker.executions == 1
 
 

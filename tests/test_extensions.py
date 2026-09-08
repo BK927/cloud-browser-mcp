@@ -191,7 +191,7 @@ async def test_page_tools_use_private_approval_and_dedup(service):
     assert (await service.call("call_page_tool", **args, confirmation_token=token))[
         "status"
     ] == "ok"
-    assert (await service.call("call_page_tool", **args))["error"]["code"] == "CONFIRMATION_USED"
+    assert (await service.call("call_page_tool", **args))["error"]["code"] == "ACTION_ALREADY_DISPATCHED"
     assert service.worker.executions == 1
 
 

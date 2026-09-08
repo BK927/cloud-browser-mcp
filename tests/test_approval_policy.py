@@ -199,7 +199,7 @@ async def test_automatic_dispatch_is_not_retried_without_visible_change(cfg, unc
         first = await service.call("act", **action)
         assert first["status"] == ("error" if uncertain else "ok")
         second = await service.call("act", **action)
-        assert second["error"]["code"] == ("RESULT_UNCERTAIN" if uncertain else "CONFIRMATION_USED")
+        assert second["error"]["code"] == ("RESULT_UNCERTAIN" if uncertain else "ACTION_ALREADY_DISPATCHED")
         assert worker.executions == 1
         assert not service.pending
         status = await service.call("status")

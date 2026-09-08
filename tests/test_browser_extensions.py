@@ -165,7 +165,7 @@ def test_native_webmcp_real_registration_call_and_staleness(browser):
     time.sleep(0.1)
     with pytest.raises(BrowserError) as exc:
         adapter.prepare(sid, tid, listed["revision"], action)
-    assert exc.value.code == "STALE_NODE"
+    assert exc.value.code == "PAGE_TOOL_STALE"
     assert tab.run_js("return window.pageToolCalls") == 1
     adapter.focus(sid, tid)
     adapter.resume(sid, tid)

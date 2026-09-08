@@ -45,7 +45,7 @@ async def test_real_view_automatic_unknown_approval_and_duplicate_guard(balanced
     assert result["status"] == "ok" and result["action_policy"]["reason"] == "view_control"
     assert node(adapter, sid, tid, "Personal Information")[1]["expanded"] == "false"
     assert not service.pending
-    assert (await service.call("act", **click))["error"]["code"] == "CONFIRMATION_USED"
+    assert (await service.call("act", **click))["error"]["code"] == "ACTION_ALREADY_DISPATCHED"
     unknown = args_for(adapter, sid, tid, "Generic action")
     proposal = await service.call("act", **unknown)
     assert proposal["status"] == "confirmation_required"
@@ -61,7 +61,7 @@ async def test_real_view_automatic_unknown_approval_and_duplicate_guard(balanced
     executed = await service.call("act", **unknown, confirmation_token=token)
     assert executed["status"] == "ok"
     assert adapter._tab(sid, tid).tab.run_js("return window.writes") == 1
-    assert (await service.call("act", **unknown))["error"]["code"] == "CONFIRMATION_USED"
+    assert (await service.call("act", **unknown))["error"]["code"] == "ACTION_ALREADY_DISPATCHED"
 
 
 async def test_real_search_fill_select_check_and_enter_without_approval(balanced):

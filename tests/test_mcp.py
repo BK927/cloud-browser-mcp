@@ -63,7 +63,7 @@ async def test_actual_streamable_http_sdk_tools_and_image(tmp_path, real_browser
                     }
                     opened = (await client.call_tool("browser_open", {})).structured_content
                     assert opened["status"] == "ok"
-                    args = {"session_id": opened["session_id"], "tab_id": opened["tab_id"]}
+                    args = {"session_id": opened["session_id"], "tab_id": opened["tab_id"], "lease_id": opened["lease_id"]}
                     observed = await client.call_tool("browser_observe", args | {"mode": "visual"})
                     assert observed.structured_content["status"] == "ok"
                     picture = next(item for item in observed.content if item.type == "image")

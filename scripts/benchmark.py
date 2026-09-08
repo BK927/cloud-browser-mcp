@@ -30,6 +30,7 @@ async def benchmark(args):
     token = auth.issue(grant)["access_token"]
     records = []
     sid = None
+    lease_id = None
     headers = {"Authorization": "Bearer " + token, "Host": urlsplit(cfg.public_origin).netloc}
     try:
         async with httpx2.AsyncClient(headers=headers, timeout=60) as http:
@@ -40,9 +41,14 @@ async def benchmark(args):
                     await client.initialize()
 
                     async def invoke(name, parameters):
+                        nonlocal lease_id
+                        if lease_id and parameters.get("session_id"):
+                            parameters = parameters | {"lease_id": lease_id}
                         start = time.perf_counter()
                         result = await client.call_tool(name, parameters)
                         value = result.structured_content
+                        if value and value.get("lease_id"):
+                            lease_id = value["lease_id"]
                         records.append(
                             {
                                 "tool": name,
@@ -60,7 +66,7 @@ async def benchmark(args):
 
                     try:
                         initial = await invoke("browser_status", {})
-                        if initial.get("sessions"):
+                        if initial.get("sessions") or initial.get("busy"):
                             raise RuntimeError(
                                 "Existing browser session: finish it before an isolated benchmark"
                             )

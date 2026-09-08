@@ -195,11 +195,33 @@ async def test_observe_admission_uses_cache_estimate_without_bypassing_pressure(
     assert (await service.call("observe", **args))["status"] == "ok"
     cgroup["memory.stat"] = counters(inactive_file=0)
     calls = len(service.worker.calls)
-    blocked = await service.call("observe", **args)
+    limited = await service.call("observe", **args)
+    assert limited["status"] == "ok"
+    assert limited["observation"]["resource_limited"] is True
+    assert len(service.worker.calls) == calls + 1
+    blocked = await service.call("observe", **args, mode="visual")
     assert blocked["error"]["code"] == "RESOURCE_PRESSURE"
-    assert len(service.worker.calls) == calls
     # Pressure does not prevent explicit cleanup or silently expire the tab.
     assert (await service.call("list_tabs", session_id=opened["session_id"]))["tabs"]
     assert (await service.call("close", session_id=opened["session_id"], scope="session"))[
         "status"
     ] == "ok"
+
+
+def test_native_process_and_parent_budgets(tmp_path, monkeypatch):
+    root = tmp_path / "cgroup"
+    leaf = root / "system.slice" / "cloud-browser.service"
+    leaf.mkdir(parents=True)
+    proc = tmp_path / "proc-cgroup"
+    proc.write_text("0::/system.slice/cloud-browser.service\n")
+    monkeypatch.setattr(resources, "CGROUP_ROOT", root)
+    monkeypatch.setattr(resources, "PROC_CGROUP", proc)
+    monkeypatch.setattr(resources.psutil, "virtual_memory", lambda: SimpleNamespace(available=2000 * MIB))
+    for directory, limit, usage in ((leaf, 1024, 400), (leaf.parent, 1400, 1200)):
+        (directory / "memory.max").write_text(str(limit * MIB))
+        (directory / "memory.current").write_text(str(usage * MIB))
+        (directory / "memory.stat").write_text(counters(inactive_file=0))
+    state = resources.memory_state(256)
+    assert state["available_mb"] == 200
+    assert state["cgroup_path"] == str(leaf.parent)
+    assert not state["can_admit"] and len(state["cgroup_constraints"]) == 2

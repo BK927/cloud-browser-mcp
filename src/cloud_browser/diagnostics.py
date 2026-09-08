@@ -136,7 +136,7 @@ async def self_test(chromium_path: str | None = None) -> dict:
                         if not opened or opened["status"] != "ok":
                             return {"ok": False, "error": "BROWSER_OPEN_FAILED", "steps": steps}
                         steps.append("real_chromium_opened")
-                        args = {"session_id": opened["session_id"], "tab_id": opened["tab_id"]}
+                        args = {"session_id": opened["session_id"], "tab_id": opened["tab_id"], "lease_id": opened["lease_id"]}
                         seen = await client.call_tool("browser_observe", args | {"mode": "visual"})
                         image = next((item for item in seen.content if item.type == "image"), None)
                         if not image:
@@ -145,8 +145,8 @@ async def self_test(chromium_path: str | None = None) -> dict:
                         if decoded.size != (1024, 768):
                             return {"ok": False, "error": "UNEXPECTED_IMAGE_SIZE", "steps": steps}
                         steps.append("mcp_image_decoded")
-                        status = (await client.call_tool("browser_status", {"session_id": args["session_id"]})).structured_content
-                        await client.call_tool("browser_close", {"session_id": args["session_id"], "scope": "session"})
+                        status = (await client.call_tool("browser_status", {"session_id": args["session_id"], "lease_id": args["lease_id"]})).structured_content
+                        await client.call_tool("browser_close", {"session_id": args["session_id"], "scope": "session", "lease_id": args["lease_id"]})
                         steps.append("session_closed")
                         return {
                             "ok": True, "steps": steps, "tools": names,

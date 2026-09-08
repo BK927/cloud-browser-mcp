@@ -40,6 +40,9 @@ class TabState:
     history_methods: dict = field(default_factory=dict)
     page_tools: object | None = None
     advertised_tools: dict | None = None
+    document_key: str = ""
+    revision_documents: dict = field(default_factory=dict)
+    ax_cache: dict = field(default_factory=dict)
     options: dict = field(
         default_factory=lambda: {
             "viewport_width": 1024,
@@ -119,11 +122,16 @@ class DrissionAdapter:
         state.tab._driver.set_callback("Network.requestWillBeSent", request_seen)
         state.tab.run_cdp("Network.enable")
 
-    def _capture_state(self, state):
+    def _capture_state(self, state, *, mode="auto", lightweight=False):
         tab = state.tab
         tab.run_cdp("Runtime.releaseObjectGroup", objectGroup="cb-observation")
         document = tab.run_cdp("Page.getFrameTree")["frameTree"]["frame"]
         frame = document["id"]
+        document_key = frame + ":" + document.get("loaderId", "")
+        if document_key != state.document_key:
+            state.nodes.clear()
+            state.screenshot = None
+            state.document_key = document_key
         history = tab.run_cdp("Page.getNavigationHistory")
         if history["entries"]:
             entry = history["entries"][history["currentIndex"]]["id"]
@@ -140,7 +148,10 @@ class DrissionAdapter:
         )["executionContextId"]
         result = tab.run_cdp(
             "Runtime.evaluate",
-            expression=SNAPSHOT,
+            expression="globalThis.__cbOptions="
+            + json.dumps({"mode": mode, "lightweight": lightweight})
+            + ";"
+            + SNAPSHOT,
             contextId=world,
             objectGroup="cb-observation",
             returnByValue=False,
@@ -157,6 +168,16 @@ class DrissionAdapter:
         data["form_digest"] = hashlib.sha256(
             json.dumps(data.pop("_form_states", []), sort_keys=True).encode()
         ).hexdigest()
+        form_digests = [
+            hashlib.sha256(json.dumps(form, sort_keys=True).encode()).hexdigest()
+            for form in data.pop("_forms", [])
+        ]
+        for meta in data["nodes"]:
+            index = meta.pop("_form_index", None)
+            meta["_form_digest"] = form_digests[index] if index is not None else None
+            meta["_value_digest"] = hashlib.sha256(
+                json.dumps(meta.pop("_own_value", None)).encode()
+            ).hexdigest()
         if state.page_tools and state.page_tools.enabled:
             data["page_tools_generation"] = state.page_tools.snapshot(frame)[0]
         elements = tab.run_cdp(
@@ -189,22 +210,32 @@ class DrissionAdapter:
             if data["protected"]:
                 data["accessibility_source"] = "withheld"
             else:
+                # Reuse names by actual backend and DOM signature. Never request an
+                # unbounded full AX tree on a large page just to read 60 controls.
+                ax_budget = 0 if lightweight else 60
+                new_cache = {}
                 for bid, meta in zip(backends, data["nodes"], strict=True):
                     try:
-                        ax = tab.run_cdp(
-                            "Accessibility.getPartialAXTree",
-                            backendNodeId=bid,
-                            fetchRelatives=False,
-                        )
-                        current = next(
-                            (
-                                n
-                                for n in ax["nodes"]
-                                if n.get("backendDOMNodeId") == bid and not n.get("ignored")
-                            ),
-                            None,
-                        )
+                        cache_key = (bid, self._node_signature(meta))
+                        current = state.ax_cache.get(cache_key)
+                        if current is None and ax_budget:
+                            ax_budget -= 1
+                            ax = tab.run_cdp(
+                                "Accessibility.getPartialAXTree",
+                                backendNodeId=bid,
+                                fetchRelatives=False,
+                            )
+                            current = next(
+                                (
+                                    n
+                                    for n in ax["nodes"]
+                                    if n.get("backendDOMNodeId") == bid and not n.get("ignored")
+                                ),
+                                {},
+                            )
+                        new_cache[cache_key] = current or {}
                         if current:
+                            meta["_dom_name"] = meta["name"]
                             meta["name"] = " ".join(
                                 str(current.get("name", {}).get("value", meta["name"])).split()
                             )[:500]
@@ -217,23 +248,77 @@ class DrissionAdapter:
                                     )
                     except Exception:
                         data["accessibility_source"] = "dom-fallback"
-                        break
+                state.ax_cache = new_cache
             state.dom_fingerprint = dom_fingerprint
         # Actual backend IDs distinguish replacements with identical visible text.
         fingerprint = hashlib.sha256(
-            json.dumps([data, backends], sort_keys=True).encode()
+            json.dumps(
+                [
+                    {
+                        k: data.get(k)
+                        for k in (
+                            "url",
+                            "title",
+                            "form_digest",
+                            "protected",
+                            "mutations",
+                            "viewport",
+                            "scroll",
+                            "height",
+                            "page_tools_generation",
+                        )
+                    },
+                    backends,
+                    [
+                        {
+                            k: meta.get(k)
+                            for k in (
+                                "focused",
+                                "rect",
+                                "scroll",
+                                "checked",
+                                "expanded",
+                                "pressed",
+                                "selected",
+                                "value",
+                            )
+                        }
+                        for meta in data["nodes"]
+                    ],
+                ],
+                sort_keys=True,
+            ).encode()
         ).hexdigest()
         if fingerprint != state.fingerprint:
             state.revision += 1
             state.fingerprint = fingerprint
-            state.screenshot = None
             state.cursors.clear()
-            state.nodes = {
-                "node_" + secrets.token_urlsafe(10): (bid, meta)
-                for bid, meta in zip(backends, data["nodes"], strict=True)
-            }
+        existing = {
+            (bid, self._node_signature(meta)): nid for nid, (bid, meta) in state.nodes.items()
+        }
+        state.nodes = {
+            existing.get((bid, self._node_signature(meta)), "node_" + secrets.token_urlsafe(10)): (
+                bid,
+                meta,
+            )
+            for bid, meta in zip(backends, data["nodes"], strict=True)
+        }
+        state.revision_documents[state.revision] = document_key
+        while len(state.revision_documents) > 256:
+            del state.revision_documents[next(iter(state.revision_documents))]
         state.data = data
         return data
+
+    @staticmethod
+    def _node_signature(meta):
+        # Layout and focus changes do not turn the same element into another one.
+        # Native state, accessible meaning and the owning form's digest do.
+        value = {
+            k: v for k, v in meta.items() if k not in ("rect", "focused", "scroll", "_dom_name")
+        }
+        if "_dom_name" in meta:
+            value["name"] = meta["_dom_name"]
+        return json.dumps(value, sort_keys=True)
 
     @staticmethod
     def _guard_page(data):
@@ -493,10 +578,17 @@ class DrissionAdapter:
         )
 
     def observe(
-        self, session_id, tab_id, mode="auto", full_page=False, max_chars=None, cursor=None
+        self,
+        session_id,
+        tab_id,
+        mode="auto",
+        full_page=False,
+        max_chars=None,
+        cursor=None,
+        lightweight=False,
     ):
         state = self._tab(session_id, tab_id)
-        data = self._capture_state(state)
+        data = self._capture_state(state, mode=mode, lightweight=lightweight)
         self._guard_page(data)
         if cursor:
             saved = state.cursors.get(cursor)
@@ -512,7 +604,8 @@ class DrissionAdapter:
                     clean = {
                         k: redact_tree(v)
                         for k, v in meta.items()
-                        if k
+                        if not k.startswith("_")
+                        and k
                         not in (
                             "href",
                             "form_action",
@@ -632,8 +725,12 @@ class DrissionAdapter:
                 "Form state exceeds safe observation budget; use manual control",
                 "user_action_required",
             )
-        if state.revision != expected_revision:
-            raise BrowserError("STALE_NODE", "Page changed; observe again", revision=state.revision)
+        if state.revision_documents.get(expected_revision) != state.document_key:
+            raise BrowserError(
+                "STALE_REVISION",
+                "The observed document is no longer current; observe again",
+                revision=state.revision,
+            )
         if action["type"] == "page_tool":
             advertised = state.advertised_tools
             if not advertised or advertised["revision"] != state.revision or not state.page_tools:
@@ -660,7 +757,9 @@ class DrissionAdapter:
         if nid:
             target = state.nodes.get(nid)
             if target is None:
-                raise BrowserError("NODE_NOT_FOUND", "Node was not issued for this observation")
+                raise BrowserError(
+                    "STALE_NODE", "Observed target changed or was replaced; observe again"
+                )
             bid, meta = target
             element = self.Element(state.tab, backend_id=bid)
             if not element.run_js("return this.isConnected"):
@@ -793,6 +892,17 @@ class DrissionAdapter:
             ],
             requires_confirmation=policy["approval_required"],
             action_policy=policy,
+            target_binding=hashlib.sha256(
+                json.dumps(
+                    [
+                        state.document_key,
+                        state.tab.url,
+                        nid,
+                        self._node_signature(meta) if meta else data["viewport"],
+                    ],
+                    sort_keys=True,
+                ).encode()
+            ).hexdigest(),
         )
 
     def act(self, session_id, tab_id, expected_revision, action):
@@ -1124,6 +1234,16 @@ class DrissionAdapter:
             return {"session_id": session_id}
         state = self._tab(session_id, tab_id)
         self._stop_page_tools(state)
+        if len(session["tabs"]) == 1:
+            session["browser"].quit()
+            del self.sessions[session_id]
+            return {
+                "session_id": session_id,
+                "tab_id": tab_id,
+                "selected_tab_id": None,
+                "session_closed": True,
+                "termination_reason": "last_tab_closed",
+            }
         state.tab.close()
         self._sync(session_id)
         return {"session_id": session_id, "tab_id": tab_id, "selected_tab_id": session["selected"]}
