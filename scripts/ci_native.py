@@ -14,6 +14,7 @@ from types import SimpleNamespace
 
 import native_install as installer
 from argon2 import PasswordHasher
+from sample_memory import group_for, sample_group
 
 
 def main():
@@ -201,6 +202,22 @@ os.execv("/usr/bin/google-chrome", ["/usr/bin/google-chrome", *sys.argv[1:]])
             )
         )
     finally:
+        # Measure the exact disposable service before teardown, including
+        # cross-UID Chromium PSS. No argv, environment, URLs or tokens are read.
+        # The MCP client has exited by this point, so this is not a peak sample.
+        if "pid" in locals() and Path(f"/proc/{pid}").exists():
+            try:
+                print(
+                    json.dumps(
+                        {
+                            "phase": "native_runtime_before_teardown",
+                            "resources": sample_group(group_for(int(pid))),
+                        }
+                    ),
+                    flush=True,
+                )
+            except (OSError, ValueError, RuntimeError, StopIteration):
+                print('{"phase":"native_runtime_before_teardown","state":"unavailable"}')
         # No data/profile deletion; runner disposal owns fixture removal. Logs
         # contain only generated test settings, never an operator credential.
         original_command(
