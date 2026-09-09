@@ -107,6 +107,17 @@ async def main():
                     assert status["resources"]["cgroup_limit_mb"] == 1024
                     await no_runtime()
                     opened, _ = await call("open")
+                    if opened["status"] != "ok":
+                        failed_status, _ = await call("status")
+                        print(
+                            json.dumps(
+                                {
+                                    "phase": "first_work_startup_failed",
+                                    "resources": failed_status.get("resources"),
+                                }
+                            ),
+                            flush=True,
+                        )
                     assert opened["status"] == "ok", opened.get("error")
                     sid, tid = opened["session_id"], opened["tab_id"]
                     seen, raw = await call("observe", session_id=sid, tab_id=tid, mode="visual")

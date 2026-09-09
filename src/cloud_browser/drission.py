@@ -726,6 +726,9 @@ class DrissionAdapter:
             options.set_argument("--disable-quic")
             options.set_argument("--no-first-run")
             options.set_argument("--no-default-browser-check")
+            # Do not start Chrome's network-heavy new-tab application only to
+            # replace it with about:blank immediately after CDP connects.
+            options.set_argument("about:blank")
             options.set_argument("--dns-prefetch-disable")
             options.set_argument("--force-webrtc-ip-handling-policy=disable_non_proxied_udp")
             options.set_argument("--disable-features=Translate,MediaRouter")
