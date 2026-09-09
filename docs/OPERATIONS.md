@@ -5,6 +5,48 @@ schema is authoritative for input bounds. These additions use the existing
 worker, node validation, human-control lock and approval/execution journal.
 There is no arbitrary JavaScript evaluation tool.
 
+## Work scheduling and adaptive memory
+
+`CB_MAX_SESSIONS=2` is the default work-capacity ceiling, not a fixed tab ceiling.
+Each work owns a separate Chromium profile and managed X display. Browser IPC
+is serialized per command in a bounded FIFO queue; waiting for the next user
+message does not reserve the execution slot. An operator can retain single-work
+mode with `CB_MAX_SESSIONS=1`. Increasing this ceiling does not bypass memory
+admission, and background pages still consume RAM/CPU. Two heavy sites are not
+guaranteed to fit a 1GiB browser budget.
+
+`CB_MEMORY_POLICY=adaptive` can borrow the normal 256MiB soft reserve down to
+`CB_MEMORY_FLOOR_MB=96`, after allowing for the requested operation's estimated
+cost. The host must still retain the normal reserve plus that cost. Starting
+a profile budgets 192MiB; a new tab 96MiB; navigation 64MiB. Capture estimates
+32MiB plus 16 bytes per pixel (full-page requests use the configured maximum
+pixel count). These are admission estimates, not per-operation hard caps or
+measured guarantees. `strict` retains the normal reserve for every admitted task.
+PSI's worst host/cgroup avg10 is reported; full stalls >=10% or some stalls >=50%
+deny new admitted work. PSI absence is reported as unknown, never zero.
+Small fresh text observations and explicit cleanup remain available under
+pressure. Auto observations fall back to bounded interactive text; a denied
+visual request returns RESOURCE_PRESSURE rather than pretending to return an image.
+
+Neither policy changes `memory.max`, swap limits, the network sandbox, approval
+rules or another work's tabs. There is no AI command that removes hard limits.
+The API and browser still share a cgroup/worker failure domain; this change does
+not promise independent process-crash recovery or host immunity from swap pressure.
+Native and Docker use this same policy and retain their existing OS hard limits.
+
+Idle TTL is renewed by processed work, not by status polling. Expired work is
+reaped periodically without clicking/observing it. Human control remains protected
+until explicit completion/cancellation, including after idle expiry. Private file
+staging must select the destination work when more than one exists. The console's
+reclaim action closes only the selected work.
+
+Capacity/control failures include a domain `error.code`, category and a safe
+reason where applicable. Up to 120 payload-free capacity log records per minute
+contain the exact MCP `request_id`; excess records are dropped. No URL, session,
+lease, arguments, page text or credentials are logged. ChatGPT/connector wrappers
+may still label an MCP error `INVALID_ARGUMENT`: the server cannot control that
+outer label and does not disguise failed calls as success to suppress it.
+
 ## Observation and completion
 
 `browser_observe.query` accepts `frame_id`, CSS `scope` and `selector`, `role`,

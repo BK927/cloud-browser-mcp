@@ -8,6 +8,7 @@ from cloud_browser.models import BrowserError
 
 
 async def test_partial_open_returns_owner_only_recovery_lease(service, monkeypatch):
+    service.cfg.max_sessions = 1  # Explicit operator single-work mode remains supported.
     original = service.worker.call
 
     async def partial(method, **kwargs):
@@ -64,15 +65,17 @@ async def test_status_survives_work_expiry_during_human_control(service):
     )
     assert status["status"] == "ok" and status["sessions"][0]["tabs"] is None
     assert status["sessions"][0]["control"]["automation_paused"]
-    assert (await service.call("open", _principal="other"))["error"]["code"] == "BROWSER_BUSY"
+    assert (await service.call("open", _principal="other"))["error"][
+        "code"
+    ] == "USER_CONTROL_ACTIVE"
 
 
-async def test_exclusive_lease_even_for_same_oauth_connection(service):
+async def test_isolated_leases_even_for_same_oauth_connection(service):
     first = await service.call("open", _principal="connection-a")
     assert first["status"] == "ok"
     sid, lease = first["session_id"], first["lease_id"]
     second = await service.call("open", _principal="connection-a")
-    assert second["error"]["code"] == "BROWSER_BUSY"
+    assert second["status"] == "ok" and second["lease_id"] != lease
     assert sid not in json.dumps(second)
     for principal, code, token in (
         ("connection-a", "LEASE_REQUIRED", None),
@@ -94,8 +97,12 @@ async def test_exclusive_lease_even_for_same_oauth_connection(service):
 
 async def test_simultaneous_open_is_not_a_session_sharing_race(service):
     results = await asyncio.gather(*(service.call("open", _principal="same") for _ in range(2)))
-    assert sorted(r["status"] for r in results) == ["error", "ok"]
-    assert len(service.sessions) == 1
+    assert sorted(r["status"] for r in results) == ["ok", "ok"]
+    assert len(service.sessions) == 2
+    assert len({r["session_id"] for r in results}) == 2
+    third = await service.call("open", _principal="same")
+    assert third["error"]["code"] == "BROWSER_BUSY"
+    assert third["busy_reason"] == "session_capacity"
 
 
 async def test_cancelled_http_waiter_keeps_dispatch_and_status_fast(service, monkeypatch):

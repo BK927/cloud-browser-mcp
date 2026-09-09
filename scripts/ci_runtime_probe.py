@@ -71,7 +71,7 @@ async def main():
     store.put("control", control, {"csrf": csrf}, 300)
     token = auth.issue(grant)["access_token"]
     host = cfg.bind_host if cfg.bind_host != "0.0.0.0" else "127.0.0.1"
-    lease = None
+    leases = {}
     try:
         async with httpx2.AsyncClient(
             headers={
@@ -87,14 +87,13 @@ async def main():
                     await client.initialize()
 
                     async def call(name, **arguments):
-                        nonlocal lease
-                        if arguments.get("session_id") and lease:
-                            arguments["lease_id"] = lease
+                        if arguments.get("session_id") in leases:
+                            arguments["lease_id"] = leases[arguments["session_id"]]
                         result = await client.call_tool("browser_" + name, arguments)
                         value = result.structured_content
                         assert value, (name, "missing structured result")
                         if value.get("lease_id"):
-                            lease = value["lease_id"]
+                            leases[value["session_id"]] = value["lease_id"]
                         assert value["status"] in (
                             "ok",
                             "no_change",
@@ -135,6 +134,13 @@ async def main():
                         "No Chromium child with no-new-privileges and seccomp filtering"
                     )
                     assert not any("x11vnc" in p.name() for p in processes())
+                    other, _ = await call("open")
+                    assert other["status"] == "ok", other.get("error")
+                    assert other["session_id"] != sid
+                    assert sum(p.name() == "Xvfb" for p in processes()) == 2
+                    blocked, _ = await call("open")
+                    assert blocked["error"]["code"] == "BROWSER_BUSY"
+                    assert blocked["busy_reason"] == "session_capacity"
                     manual, _ = await call(
                         "handoff",
                         session_id=sid,
@@ -143,8 +149,18 @@ async def main():
                     )
                     assert manual["status"] == "user_action_required", manual.get("error")
                     assert any("x11vnc" in p.name() for p in processes())
+                    # Opening work B changed the launch environment; VNC must
+                    # still bind to work A's display, never the newest display.
+                    for proc in processes():
+                        if "x11vnc" in proc.name():
+                            argv = proc.cmdline()
+                            assert argv[argv.index("-display") + 1] == f":{cfg.display_number}"
                     paused, _ = await call("observe", session_id=sid, tab_id=tid)
                     assert paused["error"]["code"] == "USER_CONTROL_ACTIVE"
+                    paused_other, _ = await call(
+                        "observe", session_id=other["session_id"], tab_id=other["tab_id"]
+                    )
+                    assert paused_other["error"]["code"] == "USER_CONTROL_ACTIVE"
                     hid = manual["handoff"]["handoff_id"]
                     async with httpx2.AsyncClient(timeout=30) as private:
                         response = await private.post(
@@ -162,6 +178,14 @@ async def main():
                     )
                     closed, _ = await call("close", session_id=sid, scope="session")
                     assert closed["status"] == "ok"
+                    other_seen, _ = await call(
+                        "observe",
+                        session_id=other["session_id"],
+                        tab_id=other["tab_id"],
+                        mode="interactive",
+                    )
+                    assert other_seen["status"] == "ok"
+                    await call("close", session_id=other["session_id"], scope="session")
                     await no_runtime()
                     opened, _ = await call("open")
                     assert opened["status"] == "ok", opened.get("error")
@@ -198,6 +222,7 @@ async def main():
                     "data_lock": True,
                     "on_demand_display": True,
                     "control_pause_resume": True,
+                    "two_isolated_works": True,
                     "worker_crash_cleanup": True,
                 }
             )

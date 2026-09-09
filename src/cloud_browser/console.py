@@ -124,14 +124,19 @@ def control_app(cfg, auth, service):
             "<!doctype html><meta charset=utf-8><title>Private browser console</title><h1>Private browser console</h1>",
             "<p>Only approve actions you recognize. Website text is untrusted. Refresh this page for updates.</p>",
         ]
+        work_options = "".join(
+            f"<option value='{html.escape(sid, quote=True)}'>{html.escape(sid)}</option>"
+            for sid in service.sessions
+        )
         blocks.append(
             f"<h2>Prepare a file for ChatGPT</h2><p>Selected files become available to the MCP by ID. Uploading to a website still requires a separate approval.</p>"
             f"<form method=post action='/uploads' enctype='multipart/form-data'><input type=hidden name=csrf value='{csrf}'>"
+            f"<label>Destination work <select name=session_id required><option value=''>Choose work</option>{work_options}</select></label>"
             f"<input type=file name=file required><button>Prepare file (maximum {cfg.max_upload_mb} MB)</button></form>"
         )
         for sid in list(service.sessions):
             blocks.append(
-                f"<h2>Exclusive browser work</h2><p>{html.escape(sid)} — reclaim closes all its tabs and ends the work lease.</p>"
+                f"<h2>Isolated browser work</h2><p>{html.escape(sid)} — reclaim closes this work's tabs and ends its lease.</p>"
                 f"<form method=post action='/sessions/{html.escape(sid, quote=True)}/reclaim'><input type=hidden name=csrf value='{csrf}'>"
                 "<button>Close session and reclaim browser</button></form>"
                 f"<p><a href='/sessions/{html.escape(sid, quote=True)}/artifacts'>This work's downloads and exports</a></p>"
@@ -243,7 +248,7 @@ def control_app(cfg, auth, service):
             source = form.get("file")
             if not isinstance(source, UploadFile):
                 raise BrowserError("INVALID_INPUT", "Choose one local file")
-            await service.stage_upload(source)
+            await service.stage_upload(source, session_id=str(form.get("session_id", "")) or None)
             return RedirectResponse("/", status_code=303)
         except BrowserError as exc:
             code = (

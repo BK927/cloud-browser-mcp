@@ -31,6 +31,7 @@ def cgroup(monkeypatch):
     original = Path.read_text
     root = Path("test-cgroup-memory")
     monkeypatch.setattr(resources, "CGROUP_ROOT", root)
+    monkeypatch.setattr(resources, "PROC_PRESSURE", root / "host.memory.pressure")
     monkeypatch.setattr(
         resources.psutil, "virtual_memory", lambda: SimpleNamespace(available=824 * MIB)
     )
@@ -199,7 +200,9 @@ async def test_observe_admission_uses_cache_estimate_without_bypassing_pressure(
     assert limited["status"] == "ok"
     assert limited["observation"]["resource_limited"] is True
     assert len(service.worker.calls) == calls + 1
-    blocked = await service.call("observe", **args, mode="visual")
+    # Adaptive policy permits a small viewport capture, but not a full-page peak.
+    assert (await service.call("observe", **args, mode="visual"))["status"] == "ok"
+    blocked = await service.call("observe", **args, mode="visual", full_page=True)
     assert blocked["error"]["code"] == "RESOURCE_PRESSURE"
     # Pressure does not prevent explicit cleanup or silently expire the tab.
     assert (await service.call("list_tabs", session_id=opened["session_id"]))["tabs"]
@@ -216,7 +219,9 @@ def test_native_process_and_parent_budgets(tmp_path, monkeypatch):
     proc.write_text("0::/system.slice/cloud-browser.service\n")
     monkeypatch.setattr(resources, "CGROUP_ROOT", root)
     monkeypatch.setattr(resources, "PROC_CGROUP", proc)
-    monkeypatch.setattr(resources.psutil, "virtual_memory", lambda: SimpleNamespace(available=2000 * MIB))
+    monkeypatch.setattr(
+        resources.psutil, "virtual_memory", lambda: SimpleNamespace(available=2000 * MIB)
+    )
     for directory, limit, usage in ((leaf, 1024, 400), (leaf.parent, 1400, 1200)):
         (directory / "memory.max").write_text(str(limit * MIB))
         (directory / "memory.current").write_text(str(usage * MIB))

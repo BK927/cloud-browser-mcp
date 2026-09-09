@@ -53,6 +53,7 @@ class Error(OutputModel):
     message: str
     retryable: bool | None = None
     suggested_tool: str | None = None
+    category: str | None = None
 
 
 class BrowserOutput(OutputModel):
@@ -69,6 +70,7 @@ class BrowserOutput(OutputModel):
     page_cached: bool | None = None
     retry_after_seconds: int | None = None
     termination_reason: str | None = None
+    busy_reason: str | None = None
 
 
 class Navigation(OutputModel):
@@ -305,6 +307,12 @@ class Resources(OutputModel):
     can_admit: bool
     cgroup_path: str
     cgroup_constraints: list[MemoryConstraint]
+    memory_pressure: dict[str, float] | None = None
+    policy: str | None = None
+    operation: str | None = None
+    required_headroom_mb: int | None = None
+    pressure_level: str | None = None
+    soft_reserve_borrowed: bool | None = None
 
 
 class Session(OutputModel):
@@ -316,6 +324,8 @@ class Session(OutputModel):
     tabs: list[Tab] | None
     selected_tab_id: str | None = None
     tabs_cached: bool | None = None
+    work_state: str | None = None
+    last_activity_at: str | None = None
 
 
 class Approval(OutputModel):
@@ -338,6 +348,19 @@ class Capabilities(OutputModel):
     installation: str
 
 
+class Scheduler(OutputModel):
+    state: str
+    active_sessions: int
+    max_sessions: int
+    expired_sessions: int
+    queued_commands: int
+    running_commands: int
+    automation_paused: bool
+    retry_after_seconds: int
+    can_open_session: bool | None = None
+    owned_commands_can_queue: bool | None = None
+
+
 class StatusOutput(BrowserOutput):
     resources: Resources | None = None
     busy: bool | None = None
@@ -347,6 +370,7 @@ class StatusOutput(BrowserOutput):
     control_url: str | None = None
     capabilities: Capabilities | None = None
     operation: Operation | None = None
+    scheduler: Scheduler | None = None
 
 
 class OutputConfiguration(OutputModel):

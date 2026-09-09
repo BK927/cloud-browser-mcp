@@ -6,6 +6,33 @@ deployment task. No credentials, profiles, routes or sibling services are to be
 replaced. Native installation is an additional path, not permission for a
 permanent migration. Project code remains MIT; engine licensing is unchanged.
 
+## 2026-09-10: replace conversation-long exclusivity
+
+The original exclusive-work decision below is superseded by isolated concurrent
+work leases (default ceiling two), with one bounded FIFO browser command at a
+time. Profiles and managed displays are separate; files require an explicit
+destination work. Manual control does not cancel another work's downloads.
+Global status now separates executing, work capacity, cleanup and human control,
+and states whether owned commands may queue. Idle work is renewed by processed
+operations, not status polls, and a background reaper verifies expired closure.
+Human completion remains possible after work TTL expiry without auto-unlocking
+an unfinished credential screen.
+
+Adaptive admission distinguishes startup, navigation and capture costs; clean
+cache accounting and host/cgroup hard bounds remain. PSI stalls can deny new
+admitted work. The API/browser failure domain is unchanged. No unlimited memory,
+live-tab eviction, permanent native migration or public credential changes are
+part of this patch. Capacity/control logs are bounded and payload-free, with
+MCP request-ID correlation; outer connector error labels remain client-owned.
+
+Validation adds two-work privacy/ownership, idle cleanup, queued timeout without
+dispatch, manual expiry recovery, file ownership, PSI and real independent
+Chromium profiles. The Docker/native disposable runtime probe also requires
+two distinct Xvfb processes and verifies that the private viewer targets the
+requested work after another work has opened. Target deployment remains gated
+on exact-commit CI and a user-approved restart window; implementation tests are
+not evidence that the Pi is already running these bytes.
+
 ## Accepted implementation sequence
 
 1. Exclusive authenticated work leases; cancellation-safe dispatch and result

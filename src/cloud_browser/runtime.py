@@ -63,6 +63,14 @@ class DisplayRuntime:
         self.cfg = cfg
         self.processes = {}
         self.authority = None
+        self.display = f":{cfg.display_number}"
+
+    def activate_environment(self):
+        # The worker creates Chromium serially. Select this work's X server
+        # before launch; later control must not use another work's environment.
+        if self.cfg.managed_display and not self.cfg.headless:
+            os.environ["DISPLAY"] = self.display
+            os.environ["XAUTHORITY"] = str(self.authority)
 
     @staticmethod
     def _spawn(argv, env=None):
@@ -80,13 +88,14 @@ class DisplayRuntime:
             return
         if "display" in self.processes:
             if self.processes["display"].poll() is None:
+                self.activate_environment()
                 return
             raise BrowserError("DISPLAY_STOPPED", "Virtual display stopped; close the session")
         if os.name != "posix":
             raise BrowserError("UNSUPPORTED_OPERATION", "Managed display requires Linux")
         import grp
 
-        display = f":{self.cfg.display_number}"
+        display = self.display
         if Path(f"/tmp/.X11-unix/X{self.cfg.display_number}").exists():
             raise BrowserError(
                 "DISPLAY_BUSY",
@@ -163,7 +172,7 @@ class DisplayRuntime:
                 [
                     "x11vnc",
                     "-display",
-                    os.environ["DISPLAY"],
+                    self.display,
                     "-auth",
                     str(self.authority),
                     "-localhost",

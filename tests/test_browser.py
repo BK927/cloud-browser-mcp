@@ -67,6 +67,30 @@ def node(adapter, sid, tid, name):
     return result, next(n for n in nodes if n["name"] == name)
 
 
+def test_two_profiles_keep_tabs_cookies_and_runtime_ownership_separate(browser):
+    adapter, sid, tid, base = browser
+    first = adapter._tab(sid, tid).tab
+    first.run_js("document.cookie='work_fixture=first; path=/'")
+    second = adapter.open("ses_second", base + "/browser.html")
+    second_tab = adapter._tab("ses_second", second["tab_id"]).tab
+    assert "work_fixture=first" not in second_tab.run_js("return document.cookie")
+    assert (
+        adapter._runtime(sid).cfg.display_number
+        != adapter._runtime("ses_second").cfg.display_number
+    )
+    assert sid in adapter.sessions and "ses_second" in adapter.sessions
+    with pytest.raises(BrowserError) as error:
+        adapter.observe(sid, second["tab_id"])
+    assert error.value.code == "TAB_NOT_FOUND"
+    adapter.focus(sid, tid)
+    assert adapter.sessions[sid]["paused"]
+    assert not adapter.sessions["ses_second"].get("paused")
+    adapter.resume(sid, tid)
+    adapter.close(sid, "session")
+    assert adapter.observe("ses_second", second["tab_id"], mode="interactive")["observation"]
+    assert adapter.list_tabs("ses_second")["tabs"]
+
+
 def test_real_accordion_inputs_select_check_and_scroll(browser):
     adapter, sid, tid, _ = browser
     observation, target = node(adapter, sid, tid, "Personal Information")
@@ -185,8 +209,12 @@ def test_real_coordinate_prefers_dom_and_pixel_probe(browser):
     _, target = node(adapter, sid, tid, "Personal Information")
     rect = target["rect"]
     prepared = adapter.prepare(
-        sid, tid, shot["revision"], {
-            "type": "click_at", "x": int(rect["x"] + rect["width"] / 2),
+        sid,
+        tid,
+        shot["revision"],
+        {
+            "type": "click_at",
+            "x": int(rect["x"] + rect["width"] / 2),
             "y": int(rect["y"] + rect["height"] / 2),
             "screenshot_id": shot["observation"]["screenshot"]["screenshot_id"],
         },

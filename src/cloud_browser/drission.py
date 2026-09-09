@@ -80,7 +80,10 @@ class DrissionAdapter:
         self.Frame = ChromiumFrame
         self.cfg = settings
         self.sessions = {}
-        self.runtime = DisplayRuntime(settings)
+        self.runtimes = {}
+
+    def _runtime(self, sid):
+        return self.runtimes[sid]
 
     def _session(self, sid):
         if sid not in self.sessions:
@@ -690,7 +693,19 @@ class DrissionAdapter:
         sid = session_id
         created = sid not in self.sessions or new_tab
         if sid not in self.sessions:
-            self.runtime.start()
+            if len(self.sessions) >= self.cfg.max_sessions:
+                raise BrowserError("BROWSER_BUSY", "Browser work capacity is occupied")
+            used = {runtime.cfg.display_number for runtime in self.runtimes.values()}
+            number = next(
+                n
+                for n in range(
+                    self.cfg.display_number, self.cfg.display_number + self.cfg.max_sessions
+                )
+                if n not in used
+            )
+            runtime = DisplayRuntime(self.cfg.model_copy(update={"display_number": number}))
+            runtime.start()
+            self.runtimes[sid] = runtime
             profile = self.cfg.data_dir / "profiles" / sid
             profile.mkdir(parents=True, exist_ok=True)
             if os.name == "posix" and not self.cfg.development:
@@ -722,8 +737,7 @@ class DrissionAdapter:
             try:
                 browser = self.Chromium(options)
             except Exception:
-                if not self.sessions:
-                    self.runtime.close()
+                self.runtimes.pop(sid).close()
                 raise
             self.sessions[sid] = {"browser": browser, "tabs": {}, "selected": None}
             try:
@@ -738,8 +752,7 @@ class DrissionAdapter:
                     partial = self.sessions.pop(sid)
                     if partial.get("artifacts"):
                         partial["artifacts"].close()
-                    if not self.sessions:
-                        self.runtime.close()
+                    self.runtimes.pop(sid).close()
                 raise
         elif new_tab:
             self.sessions[sid]["browser"].new_tab()
@@ -1997,11 +2010,13 @@ class DrissionAdapter:
             current.document_method = None
             current.document_loader = None
             current.history_methods.clear()
-        self.runtime.start_control()
+        # Each work has its own X display; the private viewer cannot switch
+        # into another work's Chromium or cancel its background downloads.
+        self._runtime(session_id).start_control()
         return {"session_id": session_id, "tab_id": tab_id}
 
     def resume(self, session_id, tab_id, auth_origin=None):
-        self.runtime.stop_control()
+        self._runtime(session_id).stop_control()
         state = self._tab(session_id, tab_id)
         for current in self._session(session_id)["tabs"].values():
             if current.pending_input:
@@ -2078,8 +2093,7 @@ class DrissionAdapter:
             session["browser"].quit()
             session["artifacts"].close()
             del self.sessions[session_id]
-            if not self.sessions:
-                self.runtime.close()
+            self.runtimes.pop(session_id).close()
             return {"session_id": session_id}
         state = self._tab(session_id, tab_id)
         self._stop_page_tools(state)
@@ -2087,8 +2101,7 @@ class DrissionAdapter:
             session["browser"].quit()
             session["artifacts"].close()
             del self.sessions[session_id]
-            if not self.sessions:
-                self.runtime.close()
+            self.runtimes.pop(session_id).close()
             return {
                 "session_id": session_id,
                 "tab_id": tab_id,
@@ -2108,4 +2121,6 @@ class DrissionAdapter:
             except Exception:
                 pass
         self.sessions.clear()
-        self.runtime.close()
+        for runtime in self.runtimes.values():
+            runtime.close()
+        self.runtimes.clear()

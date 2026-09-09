@@ -10,8 +10,9 @@ from .approval import PASSIVE_ACTIONS
 from .authentication import MANUAL_METHODS
 from .config import Settings
 from .models import BrowserError, response
+from .operation_diagnostics import log_capacity
 from .ownership import check_ownership, durable_owner, new_ownership
-from .resources import memory_state
+from .resources import admission_state, memory_state
 from .security import SENSITIVE, TOKEN, origin, redact, validate_url
 from .store import Store
 from .uploads import Uploads
@@ -38,14 +39,118 @@ class BrowserService:
         self.tasks = set()
         self.operations = {}
         self.upload_owners = {}
+        self.configurations = {}
+        self.queued = {}
+        self.running = None
+        self.sweeper = None
+        self.cleanup_required = False
 
-    async def stage_upload(self, source):
+    def start(self):
+        if self.sweeper is None:
+            self.sweeper = asyncio.create_task(self._sweep_loop())
+
+    async def _sweep_loop(self):
+        while True:
+            await asyncio.sleep(self.cfg.session_sweep_interval)
+            if self.lock.locked() or self.queued or self._active_control():
+                continue
+            async with self.lock:
+                try:
+                    await self._reap_expired()
+                except BrowserError:
+                    self.cleanup_required = True
+
+    def _active_control(self):
+        return next((x for sid in self.leases if (x := self._lease(sid))), None)
+
+    def _touch(self, sid):
+        if sid in self.sessions:
+            now = time.time()
+            self.sessions[sid].update(expires=now + self.cfg.session_ttl, last_activity=now)
+
+    def _forget(self, sid, state, reason):
+        self._remember_session(sid, state, reason)
+        self.sessions.pop(sid, None)
+        self.leases.pop(sid, None)
+        self.owners.pop(sid, None)
+        self.tab_cache.pop(sid, None)
+        self.configurations.pop(sid, None)
+        self.pending = {k: v for k, v in self.pending.items() if v["session_id"] != sid}
+        for upload, owner in list(self.upload_owners.items()):
+            if owner == sid:
+                self.uploads.discard(upload)
+                self.upload_owners.pop(upload, None)
+
+    async def _reap_expired(self):
+        if self._active_control():
+            return  # Never disturb the shared private desktop, even after expiry.
+        for sid, state in list(self.sessions.items()):
+            if (
+                state["expires"] > time.time()
+                or self.queued.get(sid)
+                or (self.running and self.running[0] == sid)
+            ):
+                continue
+            try:
+                await self._rpc("close", session_id=sid, scope="session")
+            except BrowserError as exc:
+                if exc.code == "SESSION_EXPIRED" and sid not in self.sessions:
+                    continue
+                self.cleanup_required = True
+                raise BrowserError(
+                    "CLEANUP_REQUIRED",
+                    "Expired work could not be closed; private administrator cleanup is required",
+                    "blocked",
+                ) from exc
+            self._forget(sid, "expired", "idle_lease_expired")
+        self.cleanup_required = False
+
+    def _scheduler(self):
+        control = self._active_control()
+        expired = sum(s["expires"] <= time.time() for s in self.sessions.values())
+        reason = (
+            "user_control"
+            if control
+            else "cleanup_required"
+            if self.cleanup_required
+            else "cleanup_pending"
+            if expired
+            else "executing"
+            if self.running
+            else "session_capacity"
+            if len(self.sessions) >= self.cfg.max_sessions
+            else "available"
+        )
+        return {
+            "state": reason,
+            "active_sessions": len(self.sessions),
+            "max_sessions": self.cfg.max_sessions,
+            "expired_sessions": expired,
+            "queued_commands": max(0, sum(self.queued.values()) - int(self.running is not None)),
+            "running_commands": int(self.running is not None),
+            "automation_paused": bool(control),
+            "can_open_session": len(self.sessions) < self.cfg.max_sessions
+            and not control
+            and not self.cleanup_required,
+            "owned_commands_can_queue": not control,
+            "retry_after_seconds": 2 if reason in ("executing", "cleanup_pending") else 15,
+        }
+
+    async def stage_upload(self, source, session_id=None):
         async with self.lock:
+            if session_id is None and len(self.sessions) == 1:
+                session_id = next(iter(self.sessions))
+            if session_id is None and self.sessions:
+                raise BrowserError(
+                    "SESSION_REQUIRED", "Choose the work that should receive this file"
+                )
+            if session_id:
+                self._session(session_id)
+            self._check_control(session_id)
             self._admit()
             try:
                 result = await self.uploads.stage(source)
-                # Private staging explicitly belongs to the current exclusive job.
-                self.upload_owners[result["upload_id"]] = next(iter(self.sessions), None)
+                self.upload_owners[result["upload_id"]] = session_id
                 return result
             except (OSError, KeyError) as exc:
                 raise BrowserError(
@@ -57,16 +162,22 @@ class BrowserService:
             self.uploads.discard(upload_id)
 
     def resources(self, admission=0):
-        return memory_state(self.cfg.memory_reserve_mb, admission)
+        return admission_state(
+            memory_state(self.cfg.memory_reserve_mb, admission), self.cfg, cost_mb=admission
+        )
 
-    def _admit(self, admission=0):
-        state = self.resources(admission)
+    def _admit(self, admission=0, operation="general"):
+        state = admission_state(
+            self.resources(admission), self.cfg, cost_mb=admission, operation=operation
+        )
         if not state["can_admit"]:
             raise BrowserError(
                 "RESOURCE_PRESSURE",
                 "Insufficient memory headroom; reuse or close a tab, or reduce capture size",
                 resources=state,
+                retry_after_seconds=5,
             )
+        return state
 
     def _session(self, sid):
         state = self.sessions.get(sid)
@@ -102,12 +213,16 @@ class BrowserService:
         return lease if lease and lease["state"] in ("active", "returning") else None
 
     def _check_control(self, sid, observation=False):
-        lease = self._lease(sid)
+        lease = self._active_control()
         if lease:
             raise BrowserError(
-                "AUTH_IN_PROGRESS" if lease["kind"] == "auth" else "USER_CONTROL_ACTIVE",
-                "User controls this browser session; poll browser_status",
+                "AUTH_IN_PROGRESS"
+                if lease["kind"] == "auth" and lease["session_id"] == sid
+                else "USER_CONTROL_ACTIVE",
+                "Private desktop is in use; all automation is paused. Poll browser_status",
                 "user_action_required",
+                busy_reason="user_control",
+                retry_after_seconds=15,
             )
 
     def _check_uncertain(self, sid):
@@ -181,22 +296,17 @@ class BrowserService:
     async def _call_owned(self, method, principal, lease_id, operation_id, args):
         sid = args.get("session_id")
         key = None
+        created_operation = False
         try:
             if principal is not None:
                 if method == "open" and not sid:
-                    if any(
-                        s["expires"] > time.time() or self._lease(key)
-                        for key, s in self.sessions.items()
-                    ):
-                        raise BrowserError(
-                            "BROWSER_BUSY",
-                            "Another work lease owns the browser; retry later",
-                            retry_after_seconds=15,
-                        )
+                    pass  # Capacity is checked atomically at dispatch, not for the whole conversation.
                 elif method == "status" and not sid and not lease_id:
+                    scheduler = self._scheduler()
                     return response(
                         resources=self.resources(),
-                        busy=bool(self.sessions),
+                        busy=scheduler["state"] != "available",
+                        scheduler=scheduler,
                         sessions=[],
                         approvals=[],
                         staged_uploads=[],
@@ -232,12 +342,6 @@ class BrowserService:
                     record = self.operations.get((principal, lease_id, operation_id))
                     result["operation"] = self._operation_output(record)
                 return response(**result)
-            if len(self.tasks) > 32:
-                raise BrowserError(
-                    "BROWSER_BUSY",
-                    "Command queue is full; poll status before retrying",
-                    retry_after_seconds=2,
-                )
             key = (principal, lease_id, operation_id) if operation_id else None
             digest = hashlib.sha256(json.dumps([method, args], sort_keys=True).encode()).hexdigest()
             if key and key in self.operations:
@@ -249,6 +353,13 @@ class BrowserService:
                 if record["state"] == "completed":
                     return record["result"] | {"replayed": True}
                 return response("no_change", operation=self._operation_output(record))
+            if len(self.tasks) > 32 or self.queued.get(sid, 0) >= self.cfg.max_queued_per_work:
+                raise BrowserError(
+                    "BROWSER_BUSY",
+                    "Command queue is full; poll status before retrying",
+                    busy_reason="queue_capacity",
+                    retry_after_seconds=2,
+                )
             if key:
                 # Bound result memory; never evict running commands.
                 for old_key in list(self.operations):
@@ -259,7 +370,14 @@ class BrowserService:
                 if len(self.operations) >= 128:
                     raise BrowserError("BROWSER_BUSY", "Execution result budget is full")
                 self.operations[key] = {"digest": digest, "state": "running"}
-            result = await self._serialized_call(method, principal, lease_id, **args)
+                created_operation = True
+            self.queued[sid] = self.queued.get(sid, 0) + 1
+            try:
+                result = await self._serialized_call(method, principal, lease_id, **args)
+            finally:
+                self.queued[sid] -= 1
+                if not self.queued[sid]:
+                    del self.queued[sid]
             if key:
                 self.operations[key].update(
                     state="completed", result={k: v for k, v in result.items() if k != "_image"}
@@ -267,7 +385,11 @@ class BrowserService:
             return result
         except BrowserError as exc:
             result = self._error_response(exc)
-            if key and key in self.operations and self.operations[key]["state"] == "running":
+            if (
+                created_operation
+                and key in self.operations
+                and self.operations[key]["state"] == "running"
+            ):
                 self.operations[key].update(state="completed", result=result)
             return result
 
@@ -293,13 +415,16 @@ class BrowserService:
             "AUTH_REQUIRED": "browser_auth_request",
             "CAPTCHA_REQUIRED": "browser_handoff",
         }
-        return response(
+        result = response(
             exc.status,
             session_id=sid,
             tab_id=tid,
             error={
                 "code": exc.code,
                 "message": exc.message,
+                "category": "capacity"
+                if exc.code in ("BROWSER_BUSY", "RESOURCE_PRESSURE")
+                else "browser",
                 "retryable": exc.code
                 in (
                     "STALE_NODE",
@@ -307,20 +432,27 @@ class BrowserService:
                     "STALE_SCREENSHOT",
                     "CURSOR_STALE",
                     "BROWSER_BUSY",
+                    "RESOURCE_PRESSURE",
                 ),
                 "suggested_tool": recovery.get(exc.code, "browser_status"),
             },
             **exc.details,
         )
+        # Payload-free correlation: no URLs, identifiers, arguments or credentials.
+        # Request IDs in tool responses now have an exact match in operational logs.
+        log_capacity(result)
+        return result
 
     @asynccontextmanager
     async def _command_lock(self):
         try:
-            await asyncio.wait_for(self.lock.acquire(), timeout=46)
+            await asyncio.wait_for(self.lock.acquire(), timeout=self.cfg.command_queue_timeout)
         except TimeoutError as exc:
             raise BrowserError(
                 "BROWSER_BUSY",
                 "Queued command was not dispatched within its wait budget; poll status",
+                busy_reason="queue_timeout",
+                retry_after_seconds=2,
             ) from exc
         try:
             yield
@@ -332,35 +464,21 @@ class BrowserService:
             sid, tid = args.get("session_id"), args.get("tab_id")
             before_sessions = set(self.sessions)
             try:
-                # Recheck after waiting: another opener may have acquired the lease.
-                # Reap timed-out sessions without exposing/observing their pages.
-                for old_sid, state in list(self.sessions.items()):
-                    if state["expires"] <= time.time() and not self._lease(old_sid):
-                        try:
-                            await self._rpc("close", session_id=old_sid, scope="session")
-                        except BrowserError as exc:
-                            if exc.code == "SESSION_EXPIRED" and old_sid not in self.sessions:
-                                continue  # Verified worker shutdown already invalidated it.
-                            raise BrowserError(
-                                "CLEANUP_REQUIRED",
-                                "Expired work could not be closed; private administrator cleanup is required before another work can start",
-                                "blocked",
-                            ) from exc
-                        self.sessions.pop(old_sid, None)
-                        self.leases.pop(old_sid, None)
-                        self._remember_session(old_sid, "expired", "lease_expired")
-                        self.owners.pop(old_sid, None)
-                if principal is not None and method == "open" and not sid and self.sessions:
-                    raise BrowserError(
-                        "BROWSER_BUSY", "Another work lease owns the browser; retry later"
-                    )
+                # Existing leases coexist; only one command touches the worker at a time.
+                self._check_control(sid)
+                if method == "open" and not sid:
+                    await self._reap_expired()
+                self.running = (sid, method)
                 result = await getattr(self, "_" + method)(**args)
+                self._touch(result.get("session_id", sid))
                 if method == "open" and principal is not None:
                     created_sid = result["session_id"]
                     if not sid:
                         self.owners[created_sid] = new_ownership(principal)
                         self._remember_session(created_sid, "active", "opened")
                     result["lease_id"] = self.owners[created_sid]["lease_id"]
+                if result.get("session_id") in self.sessions:
+                    result["expires_at"] = iso(self.sessions[result["session_id"]]["expires"])
                 return response(**result)
             except BrowserError as exc:
                 created = set(self.sessions) - before_sessions
@@ -374,6 +492,8 @@ class BrowserService:
                         "lease_id": self.owners[failed_sid]["lease_id"]
                     }
                 return self._error_response(exc, sid, tid)
+            finally:
+                self.running = None
 
     async def _open(self, session_id=None, url=None, new_tab=True):
         if url:
@@ -388,21 +508,25 @@ class BrowserService:
             if url:
                 self._check_uncertain(session_id)
             if new_tab:
-                self._admit(self.cfg.memory_per_tab_mb)
+                self._admit(self.cfg.memory_per_tab_mb, "new_tab")
             elif not (await self._rpc("list_tabs", session_id=session_id))["tabs"]:
-                self._admit(self.cfg.memory_per_tab_mb)
+                self._admit(self.cfg.memory_per_tab_mb, "new_tab")
         else:
             if len(self.sessions) >= self.cfg.max_sessions:
                 raise BrowserError(
                     "BROWSER_BUSY",
-                    "Another work lease owns the browser; retry later",
+                    "Work capacity is occupied; keep your own lease, or retry when a work closes. Do not join another work",
+                    busy_reason="session_capacity",
+                    retry_after_seconds=15,
+                    scheduler=self._scheduler(),
                 )
-            self._admit(self.cfg.memory_per_tab_mb)
+            self._admit(self.cfg.memory_per_session_mb, "new_session")
             session_id = "ses_" + secrets.token_urlsafe(18)
             self.store.put("session", session_id, {"state": "active"})
             self.sessions[session_id] = {
                 "expires": time.time() + self.cfg.session_ttl,
                 "uncertain": False,
+                "last_activity": time.time(),
             }
         try:
             result = await self._rpc("open", session_id=session_id, url=url, new_tab=new_tab)
@@ -421,7 +545,7 @@ class BrowserService:
         self._session(session_id)
         self._check_control(session_id)
         self._check_uncertain(session_id)
-        self._admit()
+        self._admit(64, "navigation")
         return await self._rpc(
             "navigate", session_id=session_id, tab_id=tab_id, operation=operation, url=url
         )
@@ -430,13 +554,17 @@ class BrowserService:
         self._session(session_id)
         self._check_control(session_id, observation=True)
         resources = self.resources()
-        constrained = not resources["can_admit"]
-        if constrained and options.get("mode") == "visual":
-            raise BrowserError(
-                "RESOURCE_PRESSURE",
-                "Image capture is unavailable; request bounded semantic or interactive observation",
-                resources=resources,
+        text_budget = admission_state(resources, self.cfg, cost_mb=32, operation="observation")
+        constrained = not text_budget["can_admit"] or text_budget["pressure_level"] != "normal"
+        if options.get("mode", "auto") == "auto":
+            cost = self._capture_cost(session_id, tab_id, options.get("full_page", False))
+            capture = admission_state(resources, self.cfg, cost_mb=cost, operation="capture")
+            constrained = constrained or not capture["can_admit"]
+        if options.get("mode") == "visual":
+            self._admit(
+                self._capture_cost(session_id, tab_id, options.get("full_page", False)), "capture"
             )
+            constrained = False
         if constrained:
             options.update(max_chars=min(options.get("max_chars") or 4000, 4000), lightweight=True)
             if options.get("mode", "auto") == "auto":
@@ -449,15 +577,27 @@ class BrowserService:
             result["observation"]["resource_limited"] = True
         return result
 
+    def _capture_cost(self, sid, tid, full_page=False):
+        configuration = self.configurations.get(sid, {}).get(tid, {})
+        pixels = (
+            self.cfg.max_capture_pixels
+            if full_page
+            else configuration.get("viewport_width", 1024)
+            * configuration.get("viewport_height", 768)
+        )
+        return 32 + (pixels * 16 + 1048575) // 1048576
+
     async def _configure(self, session_id, tab_id, options):
         self._session(session_id)
         self._check_control(session_id)
-        return await self._rpc("configure", session_id=session_id, tab_id=tab_id, options=options)
+        result = await self._rpc("configure", session_id=session_id, tab_id=tab_id, options=options)
+        self.configurations.setdefault(session_id, {}).setdefault(tab_id, {}).update(options)
+        return result
 
     async def _list_page_tools(self, session_id, tab_id):
         self._session(session_id)
         self._check_control(session_id, observation=True)
-        self._admit()
+        self._admit(32, "page_tools")
         return await self._rpc("list_page_tools", session_id=session_id, tab_id=tab_id)
 
     async def _call_page_tool(
@@ -729,7 +869,7 @@ class BrowserService:
         self._session(session_id)
         self._check_control(session_id, observation=operation in ("list", "get", "export"))
         if operation == "export" and format == "image":
-            self._admit()
+            self._admit(self._capture_cost(session_id, tab_id), "capture")
         return await self._rpc(
             "artifacts",
             session_id=session_id,
@@ -847,10 +987,10 @@ class BrowserService:
             raise BrowserError(
                 "HANDOFF_UNAVAILABLE", "Operator has not enabled the private remote-control console"
             )
-        if self.cfg.max_sessions != 1:
+        if len(self.sessions) > 1 and not self.cfg.managed_display:
             raise BrowserError(
                 "HANDOFF_UNAVAILABLE",
-                "Shared-display manual control requires a single browser session",
+                "Multiple works require managed isolated displays for private control",
             )
         tabs = await self._rpc("list_tabs", session_id=session_id)
         target = next((t for t in tabs["tabs"] if t["tab_id"] == tab_id), None)
@@ -867,7 +1007,7 @@ class BrowserService:
                 "Operator configuration identifies only passkey/security-key authentication; forwarding is unsupported",
                 "user_action_required",
             )
-        self.clipboards.pop(session_id, None)
+        self.clipboards.clear()
         lease = {
             "handoff_id": "handoff_" + secrets.token_urlsafe(18),
             "session_id": session_id,
@@ -938,6 +1078,8 @@ class BrowserService:
             )
             if not lease or lease["state"] != "active":
                 raise BrowserError("HANDOFF_NOT_FOUND", "Manual control is not active")
+            # An idle work TTL must not trap the user inside protected login forever.
+            self._touch(lease["session_id"])
             self._session(lease["session_id"])
             # Gate new desktop connections before disconnecting existing ones. Do not
             # restore automation until both disconnection and fresh observation succeed.
@@ -962,6 +1104,9 @@ class BrowserService:
                 )
                 lease["result"] = result
                 lease["state"] = "completed"
+                for sid in self.sessions:
+                    self._touch(sid)  # Shared private control suspended all work.
+                self.tab_cache.clear()
                 lease["verification"] = (
                     "unverified" if lease["kind"] == "auth" else "not_applicable"
                 )
@@ -1019,6 +1164,7 @@ class BrowserService:
             lease = next((x for x in self.leases.values() if x["handoff_id"] == handoff_id), None)
             if not lease or lease["state"] != "active":
                 raise BrowserError("HANDOFF_NOT_FOUND", "Manual control is not active")
+            self._touch(lease["session_id"])
             session = self._session(lease["session_id"])
             lease["expires"] = min(time.time() + self.cfg.handoff_ttl, session["expires"])
             return self._lease_output(lease)
@@ -1042,17 +1188,17 @@ class BrowserService:
                 if sid in self.sessions:
                     lease["state"] = "active"
                 raise
-            self.sessions.pop(sid, None)
-            self.leases.pop(sid, None)
-            self._remember_session(sid, "closed", "manual_cancel")
-            self.owners.pop(sid, None)
-            self.pending = {key: x for key, x in self.pending.items() if x["session_id"] != sid}
+            self._forget(sid, "closed", "manual_cancel")
             return {"state": "cancelled", "session_id": sid, "session_closed": True}
 
     def _capabilities(self):
         return {
             "protocol_contract": "0.4-draft",
-            "work_leases": "exclusive-principal-bound",
+            "work_leases": "isolated-principal-bound",
+            "scheduling": "bounded-fifo-command-queue",
+            "work_expiry": "idle-ttl-with-background-reaper",
+            "memory_admission": self.cfg.memory_policy,
+            "manual_control_scope": "isolated-display-global-dispatch-pause",
             "operation_results": "operation_id-and-browser_status",
             "image_content": True,
             "observation_format": "rendered-main-v1",
@@ -1134,6 +1280,7 @@ class BrowserService:
             ],
             "control_url": self.cfg.control_origin + "/",
             "capabilities": self._capabilities(),
+            "scheduler": self._scheduler(),
         }
         ids = [session_id] if session_id else list(self.sessions)
         for sid in ids:
@@ -1145,10 +1292,22 @@ class BrowserService:
                 "session_id": sid,
                 "expires_at": iso(state["expires"]),
                 "work_lease_expired": state["expires"] <= time.time(),
+                "last_activity_at": iso(
+                    state.get("last_activity", state["expires"] - self.cfg.session_ttl)
+                ),
+                "work_state": "user_control"
+                if self._active_control()
+                else "executing"
+                if self.running and self.running[0] == sid
+                else "queued"
+                if self.queued.get(sid)
+                else "expired"
+                if state["expires"] <= time.time()
+                else "idle",
                 "result_uncertain": state["uncertain"],
                 "control": self._lease_output(lease) if lease else None,
             }
-            if not self._lease(sid):
+            if not self._active_control():
                 item.update(self.tab_cache.get(sid, {"tabs": None}))
                 item["tabs_cached"] = True
             else:
@@ -1157,20 +1316,13 @@ class BrowserService:
         return result
 
     async def _close(self, session_id, scope, tab_id=None):
-        self._session(session_id)
+        # Closing one's expired work is always available, not gated by the idle TTL.
+        if session_id not in self.sessions:
+            self._session(session_id)
         self._check_control(session_id)
         result = await self._rpc("close", session_id=session_id, scope=scope, tab_id=tab_id)
         if scope == "session" or result.get("session_closed"):
-            self.sessions.pop(session_id, None)
-            self.leases.pop(session_id, None)
-            self._remember_session(
-                session_id, "closed", result.get("termination_reason", "explicit_close")
-            )
-            self.owners.pop(session_id, None)
-            self.tab_cache.pop(session_id, None)
-            self.pending = {
-                key: x for key, x in self.pending.items() if x["session_id"] != session_id
-            }
+            self._forget(session_id, "closed", result.get("termination_reason", "explicit_close"))
         return result
 
     async def reclaim_session(self, session_id):
@@ -1198,15 +1350,14 @@ class BrowserService:
                 if lease and session_id in self.sessions:
                     lease["state"] = "active"
                 raise
-            self._remember_session(session_id, "closed", "administrator_reclaimed")
-            self.sessions.pop(session_id, None)
-            self.owners.pop(session_id, None)
-            self.leases.pop(session_id, None)
-            self.tab_cache.pop(session_id, None)
-            self.pending = {k: v for k, v in self.pending.items() if v["session_id"] != session_id}
+            self._forget(session_id, "closed", "administrator_reclaimed")
             return {"session_closed": True, "termination_reason": "administrator_reclaimed"}
 
     async def shutdown(self):
+        if self.sweeper:
+            self.sweeper.cancel()
+            await asyncio.gather(self.sweeper, return_exceptions=True)
+            self.sweeper = None
         if self.tasks:
             await asyncio.gather(*list(self.tasks), return_exceptions=True)
         await self.worker.shutdown()

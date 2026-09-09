@@ -30,12 +30,18 @@ class Settings(BaseSettings):
     access_ttl: int = Field(900, ge=60, le=3600)
     refresh_ttl: int = Field(604800, ge=600, le=2592000)
     session_ttl: int = Field(3600, ge=60)
+    session_sweep_interval: float = Field(15, ge=1, le=300)
+    command_queue_timeout: float = Field(46, ge=1, le=60)
+    max_queued_per_work: int = Field(4, ge=1, le=16)
     approval_ttl: int = Field(120, ge=15, le=600)
     approval_policy: Literal["strict", "balanced"] = "strict"
     handoff_ttl: int = Field(600, ge=30, le=3600)
     memory_reserve_mb: int = Field(256, ge=32)
     memory_per_tab_mb: int = Field(96, ge=16)
-    max_sessions: int = Field(1, ge=1, le=8)
+    memory_policy: Literal["adaptive", "strict"] = "adaptive"
+    memory_floor_mb: int = Field(96, ge=32)
+    memory_per_session_mb: int = Field(192, ge=64)
+    max_sessions: int = Field(2, ge=1, le=8)
     max_capture_pixels: int = Field(8_000_000, ge=786432)
     navigation_timeout: float = Field(20, ge=1, le=30)
     auth_rules: dict[str, AuthRule] = Field(default_factory=dict)
@@ -71,6 +77,8 @@ class Settings(BaseSettings):
 
     @model_validator(mode="after")
     def safe_deployment(self):
+        if self.display_number + self.max_sessions > 1000:
+            raise ValueError("Display range must fit all configured work slots")
         for site, tools in self.webmcp_read_allowlist.items():
             parsed_site = urlsplit(site)
             if (
