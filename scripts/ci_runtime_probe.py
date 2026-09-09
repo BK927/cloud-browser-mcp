@@ -134,8 +134,42 @@ async def main():
                         "No Chromium child with no-new-privileges and seccomp filtering"
                     )
                     assert not any("x11vnc" in p.name() for p in processes())
-                    other, _ = await call("open")
-                    assert other["status"] == "ok", other.get("error")
+                    # Cold start/capture can temporarily charge dirty cache or
+                    # register PSI stalls. Only retry a resource denial proven
+                    # to precede session allocation; never retry an uncertain open.
+                    for attempt in range(10):
+                        other, _ = await call("open")
+                        if other["status"] == "ok":
+                            break
+                        if (other.get("error") or {}).get(
+                            "code"
+                        ) != "RESOURCE_PRESSURE" or other.get("session_id"):
+                            break
+                        resources = other.get("resources") or {}
+                        print(
+                            json.dumps(
+                                {
+                                    "phase": "second_work_admission",
+                                    "attempt": attempt + 1,
+                                    "resources": {
+                                        key: resources.get(key)
+                                        for key in (
+                                            "available_mb",
+                                            "host_available_mb",
+                                            "cgroup_used_mb",
+                                            "cgroup_raw_headroom_mb",
+                                            "cgroup_reclaimable_estimate_mb",
+                                            "memory_pressure",
+                                            "required_headroom_mb",
+                                            "pressure_level",
+                                        )
+                                    },
+                                }
+                            ),
+                            flush=True,
+                        )
+                        await asyncio.sleep(2)
+                    assert other["status"] == "ok", (other.get("error"), other.get("resources"))
                     assert other["session_id"] != sid
                     assert sum(p.name() == "Xvfb" for p in processes()) == 2
                     blocked, _ = await call("open")
