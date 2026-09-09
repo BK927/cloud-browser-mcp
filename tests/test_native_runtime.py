@@ -39,6 +39,7 @@ def test_native_units_preserve_isolation_and_equal_budget():
     )
     api = units["cloud-browser.service"].replace("\\", "/")
     assert "MemoryMax=1024M" in api and "MemorySwapMax=1024M" in api
+    assert "TasksMax=512" in api
     assert "NetworkNamespacePath=/run/netns/cb-browser" in api
     assert "CB_NETWORK_ISOLATED=true" in api and "CB_DEVELOPMENT=false" in api
     assert "User=cb-api" in api and "CB_BROWSER_GROUP=cb-browser" in api
@@ -55,6 +56,32 @@ def test_native_units_preserve_isolation_and_equal_budget():
     assert all(
         "docker.service" not in text and "--no-sandbox" not in text for text in units.values()
     )
+
+
+@pytest.mark.skipif(os.name != "posix", reason="Native config requires absolute POSIX paths")
+def test_native_task_budget_is_bounded_and_preserves_operator_value():
+    from types import SimpleNamespace
+
+    module = installer()
+    args = SimpleNamespace(
+        cidr=None,
+        memory_mib=None,
+        public_port=None,
+        control_port=None,
+        data_dir=None,
+        tasks_max=None,
+    )
+    assert module.native_config(args)["tasks_max"] == 512
+    existing = module.native_config(args) | {"tasks_max": 384}
+    assert module.native_config(args, existing)["tasks_max"] == 384
+    args.tasks_max = 640
+    cfg = module.native_config(args, existing)
+    assert cfg["tasks_max"] == 640
+    assert "TasksMax=640" in module.render_units(cfg, "/fixture/python")["cloud-browser.service"]
+    for invalid in (0, -1, 127, 4097):
+        args.tasks_max = invalid
+        with pytest.raises(RuntimeError, match="Task budget"):
+            module.native_config(args, existing)
 
 
 def test_installer_has_no_docker_lifecycle_mutations():

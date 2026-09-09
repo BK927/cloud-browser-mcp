@@ -390,6 +390,8 @@ def verify_runtime(settings):
         raise RuntimeError(
             "Native systemd memory limit is missing or differs from the operator budget"
         )
+    if (leaf / "pids.max").read_text().strip() != str(config.get("tasks_max", 256)):
+        raise RuntimeError("Native task limit is missing or differs from the operator budget")
     if (
         settings.browser_proxy != "http://" + config["host_ip"] + ":3128"
         or settings.bind_host != config["peer_ip"]

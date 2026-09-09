@@ -33,6 +33,14 @@ requested work after another work has opened. Target deployment remains gated
 on exact-commit CI and a user-approved restart window; implementation tests are
 not evidence that the Pi is already running these bytes.
 
+Integration found that Ubuntu/Google Chrome can refuse a second work for real
+memory pressure at 1GiB. A subsequent run admitted it but Chrome reported
+`pthread_create: Resource temporarily unavailable` under the old 256-task
+service ceiling. Both installation paths now have a finite operator-owned 512
+default task ceiling, independently of unchanged RAM/swap budgets. Native CI
+records exact-service PSS/cgroup/task counters before teardown; this sample
+excludes the already-exited MCP test client and is not a peak or Pi measurement.
+
 ## Accepted implementation sequence
 
 1. Exclusive authenticated work leases; cancellation-safe dispatch and result

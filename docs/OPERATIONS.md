@@ -32,7 +32,13 @@ Neither policy changes `memory.max`, swap limits, the network sandbox, approval
 rules or another work's tabs. There is no AI command that removes hard limits.
 The API and browser still share a cgroup/worker failure domain; this change does
 not promise independent process-crash recovery or host immunity from swap pressure.
-Native and Docker use this same policy and retain their existing OS hard limits.
+Native and Docker use this same policy and retain their operator RAM/swap limits.
+The finite process/thread ceiling is separate: new installations default to 512
+(`CB_BROWSER_TASK_LIMIT` in Compose; native `--tasks-max`, preserved on update).
+The old 256-task ceiling can prevent a second Chromium from creating threads.
+Changing this ceiling does not allocate RAM or raise `memory.max`; the actual
+threads still consume memory within that unchanged budget. Native startup also
+verifies its installed task limit. It is not an AI-configurable setting.
 
 Idle TTL is renewed by processed work, not by status polling. Expired work is
 reaped periodically without clicking/observing it. Human control remains protected

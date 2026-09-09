@@ -16,7 +16,7 @@ checkout하고 `.env.example`을 별도 운영자 파일로 복사해 주소·ca
 ```sh
 sudo python3 scripts/native_install.py install \
   --source . --env-file /absolute/private/browser.env \
-  --memory-mib 1024 --public-port 18000 --control-port 18001
+  --memory-mib 1024 --tasks-max 512 --public-port 18000 --control-port 18001
 sudo python3 scripts/native_install.py status
 ```
 

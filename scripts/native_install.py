@@ -108,6 +108,12 @@ def native_config(args, existing=None):
     cfg["memory_mib"] = args.memory_mib or cfg.get("memory_mib", 1024)
     if not 256 <= cfg["memory_mib"] <= 65536:
         raise RuntimeError("Memory budget must be 256..65536 MiB")
+    requested_tasks = getattr(args, "tasks_max", None)
+    cfg["tasks_max"] = (
+        requested_tasks if requested_tasks is not None else cfg.get("tasks_max", 512)
+    )
+    if not 128 <= cfg["tasks_max"] <= 4096:
+        raise RuntimeError("Task budget must be 128..4096 processes plus threads")
     cfg["public_port"] = args.public_port or cfg.get("public_port", 8000)
     cfg["control_port"] = args.control_port or cfg.get("control_port", 8001)
     if cfg["public_port"] == cfg["control_port"] or any(
@@ -172,7 +178,7 @@ ExecStart={python} -I -m cloud_browser.cli serve
 MemoryAccounting=yes
 MemoryMax={cfg["memory_mib"]}M
 MemorySwapMax={cfg["memory_mib"]}M
-TasksMax=256
+TasksMax={cfg.get("tasks_max", 512)}
 OOMPolicy=stop
 KillMode=control-group
 TimeoutStopSec=20
@@ -628,6 +634,7 @@ def main():
     parser.add_argument("--data-dir")
     parser.add_argument("--cidr")
     parser.add_argument("--memory-mib", type=int)
+    parser.add_argument("--tasks-max", type=int, help="Process/thread budget; default 512 on install")
     parser.add_argument("--public-port", type=int)
     parser.add_argument("--control-port", type=int)
     parser.add_argument("--start", action="store_true")

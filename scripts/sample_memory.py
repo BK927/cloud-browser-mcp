@@ -50,6 +50,10 @@ def sample_group(path):
         result["memory_swap_current"] = int((path / "memory.swap.current").read_text())
         result["memory_stat"] = counters(path / "memory.stat")
         result["memory_events"] = counters(path / "memory.events")
+        if (path / "pids.current").exists():
+            result["tasks_current"] = int((path / "pids.current").read_text())
+            result["tasks_max"] = (path / "pids.max").read_text().strip()
+            result["tasks_events"] = counters(path / "pids.events")
         groups = [path]
         for child in path.rglob("cgroup.procs"):
             if child.parent != path:
