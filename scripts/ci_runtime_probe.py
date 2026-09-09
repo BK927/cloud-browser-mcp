@@ -5,6 +5,7 @@ reset, and never outputs a token or page text. It intentionally kills only this
 fresh test's worker after identifying its parent and exact cgroup.
 """
 
+import argparse
 import asyncio
 import json
 import os
@@ -56,6 +57,10 @@ async def no_runtime():
 
 
 async def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--budget-mib", type=int, choices=(1024, 2048), default=1024)
+    parser.add_argument("--allow-capacity-denial", action="store_true")
+    args = parser.parse_args()
     cfg = Settings()
     if cfg.public_origin != "https://ci-mcp.example":
         raise RuntimeError("Refusing to run a crash probe against a non-CI instance")
@@ -104,7 +109,7 @@ async def main():
 
                     status, _ = await call("status")
                     assert not status["sessions"] and not status.get("busy")
-                    assert status["resources"]["cgroup_limit_mb"] == 1024
+                    assert status["resources"]["cgroup_limit_mb"] == args.budget_mib
                     await no_runtime()
                     opened, _ = await call("open")
                     if opened["status"] != "ok":
@@ -180,12 +185,30 @@ async def main():
                             flush=True,
                         )
                         await asyncio.sleep(2)
-                    assert other["status"] == "ok", (other.get("error"), other.get("resources"))
-                    assert other["session_id"] != sid
-                    assert sum(p.name() == "Xvfb" for p in processes()) == 2
-                    blocked, _ = await call("open")
-                    assert blocked["error"]["code"] == "BROWSER_BUSY"
-                    assert blocked["busy_reason"] == "session_capacity"
+                    if other["status"] != "ok" and args.allow_capacity_denial:
+                        assert (other.get("error") or {}).get("code") == "RESOURCE_PRESSURE"
+                        assert not other.get("session_id"), "Denied work must not be allocated"
+                        assert other["resources"]["can_admit"] is False
+                        assert (
+                            other["resources"]["available_mb"]
+                            < other["resources"]["required_headroom_mb"]
+                            or other["resources"]["pressure_level"] == "critical"
+                        ), "A resource denial must have measured evidence"
+                        after_denial, _ = await call("status")
+                        assert after_denial["scheduler"]["active_sessions"] == 1
+                        assert sum(p.name() == "Xvfb" for p in processes()) == 1
+                        alive, _ = await call(
+                            "observe", session_id=sid, tab_id=tid, mode="interactive"
+                        )
+                        assert alive["status"] == "ok", "Denial must preserve existing work"
+                        other = None
+                    else:
+                        assert other["status"] == "ok", (other.get("error"), other.get("resources"))
+                        assert other["session_id"] != sid
+                        assert sum(p.name() == "Xvfb" for p in processes()) == 2
+                        blocked, _ = await call("open")
+                        assert blocked["error"]["code"] == "BROWSER_BUSY"
+                        assert blocked["busy_reason"] == "session_capacity"
                     manual, _ = await call(
                         "handoff",
                         session_id=sid,
@@ -202,10 +225,11 @@ async def main():
                             assert argv[argv.index("-display") + 1] == f":{cfg.display_number}"
                     paused, _ = await call("observe", session_id=sid, tab_id=tid)
                     assert paused["error"]["code"] == "USER_CONTROL_ACTIVE"
-                    paused_other, _ = await call(
-                        "observe", session_id=other["session_id"], tab_id=other["tab_id"]
-                    )
-                    assert paused_other["error"]["code"] == "USER_CONTROL_ACTIVE"
+                    if other:
+                        paused_other, _ = await call(
+                            "observe", session_id=other["session_id"], tab_id=other["tab_id"]
+                        )
+                        assert paused_other["error"]["code"] == "USER_CONTROL_ACTIVE"
                     hid = manual["handoff"]["handoff_id"]
                     async with httpx2.AsyncClient(timeout=30) as private:
                         response = await private.post(
@@ -223,14 +247,15 @@ async def main():
                     )
                     closed, _ = await call("close", session_id=sid, scope="session")
                     assert closed["status"] == "ok"
-                    other_seen, _ = await call(
-                        "observe",
-                        session_id=other["session_id"],
-                        tab_id=other["tab_id"],
-                        mode="interactive",
-                    )
-                    assert other_seen["status"] == "ok"
-                    await call("close", session_id=other["session_id"], scope="session")
+                    if other:
+                        other_seen, _ = await call(
+                            "observe",
+                            session_id=other["session_id"],
+                            tab_id=other["tab_id"],
+                            mode="interactive",
+                        )
+                        assert other_seen["status"] == "ok"
+                        await call("close", session_id=other["session_id"], scope="session")
                     await no_runtime()
                     opened, _ = await call("open")
                     assert opened["status"] == "ok", opened.get("error")
@@ -267,7 +292,9 @@ async def main():
                     "data_lock": True,
                     "on_demand_display": True,
                     "control_pause_resume": True,
-                    "two_isolated_works": True,
+                    "budget_mib": args.budget_mib,
+                    "two_isolated_works": bool(other),
+                    "capacity_denial_preserved_existing_work": other is None,
                     "worker_crash_cleanup": True,
                 }
             )

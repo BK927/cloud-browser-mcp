@@ -40,6 +40,11 @@ service ceiling. Both installation paths now have a finite operator-owned 512
 default task ceiling, independently of unchanged RAM/swap budgets. Native CI
 records exact-service PSS/cgroup/task counters before teardown; this sample
 excludes the already-exited MCP test client and is not a peak or Pi measurement.
+Native CI separately exercises (a) 1GiB lifecycle/recovery, accepting only a
+measured pre-allocation RESOURCE_PRESSURE denial that leaves the first work
+intact, and (b) a mandatory two-work/control lifecycle at 2GiB on the disposable
+Ubuntu runner. Docker's two-work gate remains at 1GiB. Neither native CI result
+proves two profiles always fit at 1GiB or changes the Pi's deployment budget.
 
 ## Accepted implementation sequence
 

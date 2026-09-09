@@ -160,6 +160,27 @@ os.execv("/usr/bin/google-chrome", ["/usr/bin/google-chrome", *sys.argv[1:]])
             pid,
             "--script",
             source / "scripts/ci_runtime_probe.py",
+            "--allow-capacity-denial",
+        )
+        # At the unchanged Pi comparison budget, a measured pre-allocation
+        # denial is correct, provided the existing work and recovery survive.
+        # Independently REQUIRE two complete isolated work/control lifecycles
+        # with headroom on this disposable runner; this is NOT a Pi deployment
+        # or a 1GiB concurrency/performance claim. No test branch skips that gate.
+        args.memory_mib = 2048
+        installer.install(args)
+        pid = subprocess.check_output(
+            ["systemctl", "show", "cloud-browser.service", "-p", "MainPID", "--value"], text=True
+        ).strip()
+        original_command(
+            python,
+            source / "scripts/native_benchmark.py",
+            "--pid",
+            pid,
+            "--script",
+            source / "scripts/ci_runtime_probe.py",
+            "--budget-mib",
+            "2048",
         )
         # Actual kernel UID/namespace denial, with a known live loopback listener:
         # app can reach API health but browser UID cannot reach its control plane.
@@ -196,7 +217,8 @@ os.execv("/usr/bin/google-chrome", ["/usr/bin/google-chrome", *sys.argv[1:]])
                 {
                     "native_runtime_smoke": "passed",
                     "platform": "Ubuntu CI with Google Chrome; not a Debian/Pi performance result",
-                    "budget_mib": 1024,
+                    "recovery_budget_mib": 1024,
+                    "required_dual_work_budget_mib": 2048,
                     "installer_umask": "0077; fresh install and same-release update",
                 }
             )
