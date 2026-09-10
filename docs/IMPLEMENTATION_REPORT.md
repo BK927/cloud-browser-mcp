@@ -78,7 +78,8 @@ self-test 결과:
 - 웹 ChatGPT에 앱을 등록하고 실제 대화에서 도구/이미지를 사용하는 전체 과정.
 - 모델이 DOM에 없는 색·배치 정보를 실제 이미지에서 인식하는지 여부.
 - 공개 HTTPS/OAuth 연결 및 실제 사용자 로그인·noVNC 수동 화면의 배포 환경 검증.
-- Linux amd64/arm64 Docker 실행과 Raspberry Pi 4B 2GB 성능.
+- Linux amd64/arm64 Docker 실행과 Raspberry Pi 4 Model B(2GB RAM) 성능.
+  이 장비는 후속 시험에 사용된 장비일 뿐이며 권장 장비나 최소 요구사항이 아닙니다.
 - 다양한 동적 사이트·가상 스크롤·Shadow DOM의 완전한 관찰 호환성.
 
 위 기록 작성 당시에는 파일 입력·WebMCP·인증 규칙이 없었습니다. 이후 2026-09-08 작업에서

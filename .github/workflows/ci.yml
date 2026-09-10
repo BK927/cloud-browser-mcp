@@ -39,7 +39,7 @@ jobs:
       - run: pip install uv==0.12.9
       - run: uv sync --frozen --extra dev --extra browser
       # Uses the actual installer/unit/netns code on a disposable Ubuntu runner;
-      # Debian 13 installation and Pi performance remain separate target gates.
+      # Real-hardware Pi measurements remain documented separately from CI.
       - run: sudo --preserve-env=GITHUB_ACTIONS,RUNNER_OS .venv/bin/python scripts/ci_native.py
       # Actual NetworkManager, but only inside its own network-none container.
       # Capabilities/proc access permit nested test netns and their IPv6 sysctls;

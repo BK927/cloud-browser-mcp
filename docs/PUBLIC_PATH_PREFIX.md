@@ -60,8 +60,8 @@ Do not rewrite foreign/null Origins into the allowed origin. The application doe
 not infer its prefix from proxy headers or dynamically supplied hosts.
 
 Do not publish the backend listener directly or forward all root traffic to this
-application. Existing sibling services at `/mcp`, `/steam`, `/dlsite`, other ports,
-and the private control route must retain their previous mappings. Tailscale Serve
+application. Unrelated services, applications on other paths or ports, and the
+private control route must retain their previous mappings. Tailscale Serve
 and Funnel configuration belongs to the deployment operator; this code patch does
 not edit it. Verify actual prefix stripping and fixed-Host behavior before switching
 traffic; a local test proxy is not evidence about a particular Tailscale deployment.
@@ -104,7 +104,7 @@ external URLs, headers, queries, tokens or bodies. See [HTTP diagnostics](HTTP_D
 `tests/test_public_prefix.py` and `tests/prefix_proxy.py` exercise a real loopback
 HTTP reverse proxy with fixed Host and stripped paths, including root/prefixed
 discovery, authorization, PKCE, refresh/revoke, MCP initialize/list/call/image,
-identical 12-tool schemas, private-route isolation, bad Host/Origin/path/audience
+identical 17-tool schemas, private-route isolation, bad Host/Origin/path/audience
 rejection and stored old-resource rejection without grant migration.
 
 `tests/test_public_prefix_browser.py` additionally uses real Chrome and an isolated

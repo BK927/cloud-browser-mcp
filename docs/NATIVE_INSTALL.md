@@ -2,7 +2,8 @@
 
 Docker 없이 같은 Python 패키지·DrissionPage 어댑터·MCP 계약을 실행하는 추가 경로입니다.
 지원 대상은 Debian 13 arm64/amd64이며 Windows/macOS는 [Docker](DEPLOYMENT.md)를 사용합니다.
-Pi 영구 전환은 자동으로 수행하지 않습니다. Debian 13 arm64의 설치·3회 workload와
+Pi 영구 전환은 자동으로 수행하지 않습니다. 시험에 사용한 Raspberry Pi 4 Model B(2GB RAM)는
+권장 장비나 최소 요구사항이 아닙니다. Debian 13 arm64의 설치·3회 workload와
 Docker 비교는 [2026-09-09 실측](PI_COMPARISON_2026-09-09.md)을 통과했습니다.
 네이티브의 추가 절감은 작았으며 긴 전체 페이지 캡처는 1GiB 예산에서 거절됐습니다.
 

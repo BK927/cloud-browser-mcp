@@ -7,7 +7,8 @@
   "source_archive_sha256": "39a66abc9efcb8db23bccbb7b92c077b5a6445c27ce0f1c55532742b7643cd3f",
   "benchmark_sha256": "d7f35dde636c348e0d8e0f5dca23d508b0c0a0c7308726504f85095c8a425cfc",
   "environment": {
-    "hardware": "Raspberry Pi 4B 2GB",
+    "hardware": "Raspberry Pi 4 Model B (2 GB RAM)",
+    "hardware_role": "Benchmark and integration-test hardware only; not a recommendation or minimum requirement.",
     "os": "Debian GNU/Linux 13",
     "architecture": "aarch64",
     "kernel": "6.18.39+rpt-rpi-v8",

@@ -5,15 +5,19 @@
 참고하세요. 양쪽 모두 같은 브라우저/계약 코드를 사용하며 새 버전은 세션이 있을 때만
 Xvfb·Chromium, 수동 제어 때만 VNC/중계를 실행합니다.
 
-이 안내는 개인 서버 한 대 기준입니다. Docker/arm64/실제 ChatGPT 연결은 검증 관문이
-남아 있습니다. 실패 시 원인 확인 없이 sandbox·인증·내부망 차단을 끄지 마세요.
+이 안내는 개인 서버 한 대 기준입니다. Raspberry Pi 4 arm64 Docker 경로는 기록된
+벤치마크·통합 시험에서 확인했습니다. Debian amd64 또는 다른 호스트의 현장 설치,
+Windows/macOS Docker Desktop, 실제 ChatGPT 계정 연결은 아직 별도 검증이 필요합니다.
+실패 시 원인 확인 없이 sandbox·인증·내부망 차단을 끄지 마세요.
 
 ## 1. 준비
 
 - Debian 13 64비트 arm64 또는 amd64, 보안 업데이트된 Docker Engine 28 이상 + Compose.
   최종 seccomp 기준은 Engine 29.8.0이며 업그레이드 시 실제 sandbox 실행을 재검증합니다.
-- Raspberry Pi 4B 2GB는 목표 장비이며 성능 보증치가 아닙니다.
-- Windows/macOS는 Docker Desktop의 Linux 컨테이너를 사용합니다.
+- Raspberry Pi 4 Model B(2GB RAM)는 벤치마크·통합 시험에 사용한 장비일 뿐이며,
+  권장 장비나 최소 요구사항이 아닙니다.
+- Windows/macOS에서 시도할 때는 Docker Desktop의 Linux 컨테이너가 필요하지만,
+  이 경로는 현재 검증되지 않았습니다.
 - 서버와 사용자 기기에 Tailscale 설치, 같은 tailnet 로그인.
 - HTTPS Serve/Funnel 사용 권한과 사용 가능한 DNS 이름.
 - 웹 ChatGPT 계정에서 사용자 지정 MCP/개발자 모드 사용 가능 여부 확인.
@@ -127,7 +131,7 @@ tailscale serve --bg --https=8443 http://127.0.0.1:8001
 최초 연결 시 공개 OAuth 페이지에서 **서버 관리자 암호**로 승인합니다. 웹사이트 암호를
 이 페이지에 입력하지 마세요. 웹사이트 로그인은 tailnet 전용 콘솔의 원격 화면에서만 합니다.
 
-도구 12개를 확인한 다음 [검증 절차](VALIDATION.md)의 이미지 인식 시험을 수행합니다.
+도구 17개를 확인한 다음 [검증 절차](VALIDATION.md)의 이미지 인식 시험을 수행합니다.
 OAuth HTTP 테스트 성공만으로 실제 ChatGPT 호환을 완료 처리하지 않습니다.
 
 ## 5. 수동 로그인·승인

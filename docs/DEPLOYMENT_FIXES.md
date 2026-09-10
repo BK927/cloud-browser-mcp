@@ -6,7 +6,7 @@
 ## 재현과 수정
 
 1. Docker 26.1.5에서 browser internal-only 네트워크의 host PortBindings가 실제
-   생성되지 않았습니다. 앱 내부 health/MCP initialize/도구 12개 조회만 통과했습니다.
+   생성되지 않았습니다. 당시 앱 내부 health/MCP initialize/도구 12개 조회만 통과했습니다.
    browser의 직접 publish를 제거하고, 별도 비특권 ingress를 통해 8000/8001을
    각각 browser의 같은 포트로만 중계합니다. browser의 네트워크 격리는 그대로입니다.
 2. 같은 Pi에서 일반 사용자의 user/PID/network namespace 생성은 성공하지만 컨테이너의
@@ -107,7 +107,8 @@ PKCE 코드 교환과 재사용 거부, 미등록 form 목적지 차단을 확�
 - 최종 패키지로 ingress의 host upstream, 인증된 HTTP MCP/이미지,
   private console/실제 WebSocket, 프록시 중단 시 차단, 다른 MCP 회귀 검증이 필요합니다.
 - Docker 관리 프로세스 RAM과 browser/egress/ingress RAM은 분리해 측정해야 합니다.
-  컨테이너 상한과 실제 사용량은 다릅니다. Pi 2GB 성능·긴 캡처·메모리 압박,
+  컨테이너 상한과 실제 사용량은 다릅니다. 시험에 사용한 Raspberry Pi 4 Model B(2GB RAM)는
+  권장 장비나 최소 요구사항이 아닙니다. 해당 장비의 성능·긴 캡처·메모리 압박,
   실제 웹 ChatGPT OAuth/이미지 인식은 별도 관문입니다.
 
 운영 .env·DB·프로필·토큰은 배포 아카이브나 이 기록에 넣지 않습니다.

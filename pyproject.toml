@@ -3,13 +3,27 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [project]
-name = "personal-cloud-browser-mcp"
+name = "cloud-browser-mcp"
 version = "0.1.0"
-description = "Single-user, self-hosted Chromium browser for remote MCP clients"
+description = "Self-hosted Chromium MCP server for ChatGPT with OAuth and human approval"
 requires-python = ">=3.12"
 license = "MIT"
 license-files = ["LICENSE", "THIRD_PARTY_NOTICES.md"]
 readme = "README.md"
+authors = [{ name = "BK927" }]
+keywords = [
+  "mcp", "mcp-server", "model-context-protocol", "browser-automation",
+  "chromium", "self-hosted", "chatgpt", "remote-browser", "docker",
+  "arm64", "debian", "oauth2", "human-in-the-loop", "webmcp",
+]
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "License :: OSI Approved :: MIT License",
+  "Operating System :: POSIX :: Linux",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+]
 dependencies = [
   "mcp>=2.0,<3", "fastapi>=0.115,<1", "uvicorn>=0.34,<1",
   "pydantic-settings>=2.8,<3", "argon2-cffi>=25,<26",
@@ -26,6 +40,7 @@ dev = ["pytest>=8,<10", "pytest-asyncio>=1,<2", "ruff>=0.11,<1", "pyyaml>=6,<7"]
 cloud-browser = "cloud_browser.cli:main"
 
 [project.urls]
+Homepage = "https://github.com/BK927/cloud-browser-mcp"
 Repository = "https://github.com/BK927/cloud-browser-mcp"
 Issues = "https://github.com/BK927/cloud-browser-mcp/issues"
 Documentation = "https://github.com/BK927/cloud-browser-mcp#readme"

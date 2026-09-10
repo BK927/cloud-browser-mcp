@@ -4,7 +4,7 @@
 2026-09-08 Pi 배포 결함 수정·격리 canary는 [배포 수정 기록](DEPLOYMENT_FIXES.md)에
 별도 기록합니다. 아래의 초기 미검증 표기는 그 후속 시험 전 상태입니다.
 **아래 로컬 통과를 Pi/Docker/웹 ChatGPT 통합 완료로 해석하지
-않습니다.** 실제 계정·Funnel 주소·목표 장비 접근 없이 해당 결과를 만들 수 없습니다.
+않습니다.** 실제 계정·Funnel 주소·해당 시험 장비 접근 없이 해당 결과를 만들 수 없습니다.
 
 ## 확인한 환경
 
@@ -53,7 +53,7 @@ W3C는 [원본 아코디언 예제](https://www.w3.org/WAI/ARIA/apg/patterns/acc
 
 ## 필수 미완료 관문 A — 실제 웹 ChatGPT
 
-1. 운영 HTTPS origin과 정확한 callback으로 OAuth 연결. 현 작업본의 도구 12개 확인.
+1. 운영 HTTPS origin과 정확한 callback으로 OAuth 연결. 현 작업본의 도구 17개 확인.
 2. 운영자가 `tests/fixtures/visual-probe.html`을 본인 소유의 **별도 공개 시험 origin**에
    올립니다. MCP public listener에는 새 정적 콘텐츠 경로를 추가하지 않습니다.
 3. ChatGPT에 그 URL을 열고 semantic/interactive만 관찰하게 합니다. 무작위 숫자가
@@ -78,9 +78,12 @@ W3C는 [원본 아코디언 예제](https://www.w3.org/WAI/ARIA/apg/patterns/acc
 - 비밀번호/OTP/카드/iframe 화면 screenshot이 차단되고 로그에 입력이 없는지 확인.
 - 실제 브라우저 강제 종료·서버 재시작 후 기존 ID가 만료되는지 확인.
 
-## 필수 미완료 관문 C — Raspberry Pi 4B 2GB
+## 과거 하드웨어 시험 체크리스트 — Raspberry Pi 4 Model B(2GB RAM)
 
-초기 예산값은 실측 전 제안일 뿐입니다. 다른 세션을 종료한 후 컨테이너 안에서
+이 장비는 후속 벤치마크·통합 시험에 사용한 장비일 뿐이며 권장 장비나 최소 요구사항이
+아닙니다. 이 절은 실측 전에 작성한 체크리스트를 보존합니다. 완료된 결과는
+[Pi 실측 보고서](PI_COMPARISON_2026-09-09.md)를 참고하세요. 초기 예산값은 실측 전
+제안일 뿐입니다. 다른 세션을 종료한 후 컨테이너 안에서
 운영자 전용 벤치마크를 실행합니다. 스크립트는 짧은 로컬 진단 grant를 만들고 종료 시
 취소하며, 생성한 세션만 닫습니다. 토큰·DOM 원문은 출력하지 않습니다.
 
@@ -98,6 +101,6 @@ docker stats --no-stream
 컨테이너의 메모리 예산을 낮춰 `RESOURCE_PRESSURE`를 확인하고, 기존 로그인 작업을
 수행 중인 서버를 고의로 종료하지 마세요.
 
-이 관문을 마친 뒤 장비별 결과·제한을 본 문서에 추가해야 정식 지원 범위를 확정할 수
+당시 이 관문을 마친 뒤 장비별 결과·제한을 본 문서에 추가해야 정식 지원 범위를 확정할 수
 있습니다. 후속 Docker/Pi 부분 결과는 [배포 수정 기록](DEPLOYMENT_FIXES.md)을 참고하세요.
 실제 ChatGPT 이미지 인식 결과는 아직 없습니다.

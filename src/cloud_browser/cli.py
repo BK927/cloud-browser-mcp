@@ -42,7 +42,7 @@ async def serve(cfg):
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Personal Cloud Browser MCP")
+    parser = argparse.ArgumentParser(description="Cloud Browser MCP")
     parser.add_argument(
         "command", choices=["serve", "hash-password", "doctor", "self-test", "revoke-all"]
     )

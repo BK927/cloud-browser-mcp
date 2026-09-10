@@ -42,7 +42,7 @@
 | 파일 입력 | 비공개 준비 → 불투명 ID → 파일 정보 승인 → 동일 파일 재검사 → 실제 Chromium 파일 입력. 승인 전 0회·승인 후 1회·재호출 미실행 검사 |
 | WebMCP | 실제 Chromium CDP 광고·호출 연결. 모든 호출 승인, schema 검증, 목록 변경·제어권 전환 이후 stale 거부 |
 
-현재 12개 MCP 도구를 제공합니다. 입력·출력·운영자 설정은
+현재 17개 MCP 도구를 제공합니다. 입력·출력·운영자 설정은
 [확장 계약](CONTRACT_EXTENSIONS.md)에 있습니다. 단순 미지원 메시지로 위 기능을 대신하지 않습니다.
 
 2026-09-08 최종 전체 로컬 회귀: **123 passed, 1 skipped, 1 warning in 142.51s**.
@@ -76,7 +76,8 @@ pytest가 사용하는 Chrome은 모두 테스트 프로필이며 실제 계정�
 ## 다른 세션에서 진행할 배포 검증
 
 - Debian arm64/amd64 Docker 실제 실행 및 네트워크 격리·noVNC.
-- Raspberry Pi 4B 2GB의 실측 성능·메모리 압박·긴 페이지 캡처·브라우저 종료.
+- Raspberry Pi 4 Model B(2GB RAM)의 실측 성능·메모리 압박·긴 페이지 캡처·브라우저 종료.
+  이 장비는 시험 장비일 뿐이며 권장 장비나 최소 요구사항이 아닙니다.
 - 공개 HTTPS/Funnel/OAuth에서 웹 ChatGPT가 실제 도구와 이미지 내용을 인식하는지 확인.
 
 공개 커밋 `4e119f4`의 GitHub Actions에서는 Linux 브라우저 시험과 amd64/arm64 이미지

@@ -155,7 +155,7 @@ WantedBy=multi-user.target
     api = (
         MANAGED
         + f"""[Unit]
-Description=Personal Cloud Browser MCP (native)
+Description=Cloud Browser MCP (native)
 Requires=cloud-browser-network.service cloud-browser-egress.service
 After=cloud-browser-network.service cloud-browser-egress.service
 [Service]
