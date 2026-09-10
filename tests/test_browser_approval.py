@@ -93,7 +93,10 @@ async def test_real_link_automatic_general_edits_and_effects_still_gated(balance
         result = await service.call("act", **args_for(adapter, sid, tid, name, **action))
         assert result["status"] == ("ok" if action["type"] == "fill" else "confirmation_required")
     assert adapter._tab(sid, tid).tab.run_js("return window.writes") == 0
-    assert adapter._tab(sid, tid).tab.run_js("return document.querySelector('#draft').value") == "Do not send"
+    assert (
+        adapter._tab(sid, tid).tab.run_js("return document.querySelector('#draft').value")
+        == "Do not send"
+    )
     result = await service.call("act", **args_for(adapter, sid, tid, "Documentation"))
     assert result["status"] == "ok" and result["action_policy"]["reason"] == "http_navigation"
     assert adapter._tab(sid, tid).tab.url.endswith("/browser.html")
@@ -152,3 +155,46 @@ async def test_real_implicit_search_submission_cannot_skip_approval(balanced, mu
     )
     assert result["status"] == "confirmation_required"
     assert adapter._tab(sid, tid).tab.url == before
+
+
+async def test_real_local_tool_help_and_popup_are_automatic_but_not_submissions(balanced):
+    service, adapter, sid, tid, base = balanced
+    adapter.navigate(sid, tid, "goto", base + "/local-ui.html")
+    for name, reason in (
+        ("Rectangle", "local_ui_tool_selection"),
+        ("Help", "local_ui_help"),
+        ("View menu", "view_control"),
+    ):
+        result = await service.call("act", **args_for(adapter, sid, tid, name))
+        assert result["status"] == "ok" and result["action_policy"]["reason"] == reason
+    tab = adapter._tab(sid, tid).tab
+    assert node(adapter, sid, tid, "Rectangle")[1]["pressed"] == "true"
+    assert tab.run_js(
+        "return !document.querySelector('#help').hidden && !document.querySelector('#menu').hidden"
+    )
+    for name in ("Image", "Delete drawing"):
+        result = await service.call("act", **args_for(adapter, sid, tid, name))
+        assert result["status"] == "confirmation_required"
+    result = await service.call(
+        "act", **args_for(adapter, sid, tid, "New Todo Input", type="keypress", keys=["ENTER"])
+    )
+    assert result["status"] == "confirmation_required" and tab.run_js("return window.writes") == 0
+
+
+async def test_local_ui_context_change_before_dispatch_is_rejected(balanced, monkeypatch):
+    service, adapter, sid, tid, base = balanced
+    adapter.navigate(sid, tid, "goto", base + "/local-ui.html")
+    action = args_for(adapter, sid, tid, "Rectangle")
+    original = adapter.prepare
+
+    def change(*args, **kwargs):
+        result = original(*args, **kwargs)
+        adapter._tab(sid, tid).tab.run_js(
+            "document.querySelector('[role=toolbar]').setAttribute('aria-label','Account permissions')"
+        )
+        return result
+
+    monkeypatch.setattr(adapter, "prepare", change)
+    result = await service.call("act", **action)
+    assert result["error"]["code"] == "STALE_NODE"
+    assert node(adapter, sid, tid, "Rectangle")[1]["pressed"] == "false"

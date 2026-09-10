@@ -1217,7 +1217,7 @@ class BrowserService:
             "pagination": "revision-bound-complete-nodes",
             "approval_policy": "strict-per-action"
             if self.cfg.approval_policy == "strict"
-            else "balanced-v2",
+            else "balanced-v3",
             "iframe_screenshot_policy": self.cfg.iframe_screenshot_policy,
             "file_upload_automation": True,
             "file_upload_scope": "private-staged-files-only",

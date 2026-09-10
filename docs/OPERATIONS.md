@@ -86,12 +86,22 @@ drag uses 2–30 bounded pointer steps. Native pointer drags are supported;
 browser-specific HTML5 drag-data behavior is not universally guaranteed.
 
 Click/key/drag actions accept modifier names ALT/CONTROL/META/SHIFT. Ordinary
-editing and Ctrl+A/Z/Y are automatic in balanced-v2. Modified activation and
+editing and Ctrl+A/Z/Y are automatic in balanced-v3. Modified activation and
 unknown drag effects still require approval. Ctrl/Meta+C/V/X are blocked: they
 would access a process/global clipboard. Use `browser_clipboard` instead.
 Key and mouse releases run even on failures. A modal dialog that prevents CDP
 release defers only that release until the dialog response; the action is never
 re-dispatched. Closing the browser also discards its input state.
+
+Balanced-v3 also permits non-form popup buttons tied to an existing menu/dialog/listbox
+or native popover, and a narrow set of canvas-editor tool/help controls. Tool selection
+needs an observed pressed/radio state, a toolbar/group or keyboard shortcut, a nearby
+visible canvas with multiple tool controls, and a recognized tool name. Help needs
+that editor context plus an F1/? shortcut. Names or `aria-pressed` alone are insufficient.
+Account/privacy/permission context, submission, transfers and unknown effects still
+require approval. Image/upload, eraser/delete and generic Enter submission are not
+covered. This is a bounded UX heuristic, not proof that arbitrary JS cannot save or
+transmit data. Strict remains operator-selectable; existing configuration names are unchanged.
 
 ## Dialogs and diagnostics
 

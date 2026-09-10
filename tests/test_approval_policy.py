@@ -211,7 +211,34 @@ async def test_automatic_dispatch_is_not_retried_without_visible_change(cfg, unc
         assert worker.executions == 1
         assert not service.pending
         status = await service.call("status")
-        assert status["capabilities"]["approval_policy"] == "balanced-v2"
+        assert status["capabilities"]["approval_policy"] == "balanced-v3"
     finally:
         await service.shutdown()
         store.close()
+
+
+@pytest.mark.parametrize(
+    "meta,allowed",
+    [
+        ({"name": "Rectangle", "local_ui": "editor_tool"}, True),
+        ({"name": "Help", "local_ui": "editor_help"}, True),
+        ({"name": "Help"}, False),
+        ({"name": "Rectangle", "pressed": "false"}, False),
+        ({"name": "Image", "local_ui": "editor_tool"}, False),
+        ({"name": "Eraser", "local_ui": "editor_tool"}, False),
+        ({"name": "Grant access", "local_ui": "editor_tool"}, False),
+        ({"name": "Help", "local_ui": "editor_help", "ui_context": "Account permissions"}, False),
+        ({"name": "Rectangle", "local_ui": "editor_tool", "submits_form": True}, False),
+        ({"name": "New Todo Input", "tag": "input", "type": "text"}, False),
+    ],
+)
+def test_local_ui_is_not_a_general_activation_bypass(meta, allowed):
+    action = (
+        {"type": "click"} if meta.get("tag") != "input" else {"type": "keypress", "keys": ["ENTER"]}
+    )
+    target = {"tag": "button", "type": "button"} | meta
+    assert decide("balanced", action, target, PAGE)["approval_required"] is not allowed
+    assert decide("strict", action, target, PAGE)["approval_required"]
+    assert decide("balanced", action | {"modifiers": ["CONTROL"]}, target, PAGE)[
+        "approval_required"
+    ]

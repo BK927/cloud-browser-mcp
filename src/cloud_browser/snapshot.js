@@ -147,6 +147,35 @@
       (controlled && ['true','false'].includes(e.getAttribute('aria-expanded')))
     ) ? 'disclosure' : !submit && controlled && role === 'tab' &&
       controls.every(id => document.getElementById(id).getAttribute('role') === 'tabpanel') ? 'tab' : null;
+    const popupRole = e.getAttribute('aria-haspopup');
+    const popupTarget = e.getAttribute('popovertarget') && document.getElementById(e.getAttribute('popovertarget'));
+    const popupView = !form && !e.href && e.tagName === 'BUTTON' && (
+      (popupTarget && popupTarget.hasAttribute('popover')) ||
+      (controlled && ['menu','dialog','listbox'].includes(popupRole) && controls.every(
+        id => document.getElementById(id).getAttribute('role') === popupRole))
+    );
+    const toolGroup = e.closest('[role=toolbar],[role=radiogroup],fieldset');
+    const shortcut = normalize(e.getAttribute('aria-keyshortcuts'));
+    const helpShortcut = /^(\?|F1)$/i.test(shortcut) || /[—-]\s*(\?|F1)\s*$/i.test(e.title);
+    const toolState = (e.tagName === 'BUTTON' && ['true','false'].includes(e.getAttribute('aria-pressed'))) ||
+      (e.tagName === 'INPUT' && e.type === 'radio');
+    let canvasContext = false;
+    for (let parent=e.parentElement, depth=0; !form && !submit && !e.href && (toolState || helpShortcut) && parent && depth<8; parent=parent.parentElement, depth++) {
+      const canvas = parent.querySelector('canvas');
+      if (canvas && visible(canvas) && parent.querySelectorAll('button[aria-pressed],input[type=radio]').length >= 2) {
+        canvasContext = true; break;
+      }
+    }
+    const localUi = !form && !e.href && !submit && canvasContext ? (
+      toolState && (toolGroup || shortcut) ? 'editor_tool' :
+      e.tagName === 'BUTTON' && helpShortcut ? 'editor_help' : null
+    ) : null;
+    // Context hints are server-observed evidence, not proof that arbitrary JS is harmless.
+    const contextGroup = toolGroup || e.closest('[role=dialog],[role=group],[role=application],section[aria-label]');
+    const uiContext = contextGroup ? normalize(contextGroup.getAttribute('aria-label') ||
+      (contextGroup.getAttribute('aria-labelledby') || '').split(/\s+/).slice(0,4)
+        .map(id=>document.getElementById(id)?.textContent || '').join(' ') ||
+      contextGroup.querySelector('legend')?.textContent || '') : '';
     const submitters = form && form.elements.length <= 100 ? [...form.elements].filter(c =>
       c.type === 'submit' || c.type === 'image') : [];
     // Enter can activate the default submitter, including its method/action override.
@@ -167,7 +196,7 @@
     return {tag: e.tagName.toLowerCase(), type: e.type || '', role: roleOf(e),
       visible: visible(e), in_viewport: inViewport(e),
       search_context: searchContext,
-      view_control: viewControl, search_form: searchForm,
+      view_control: popupView ? 'popup' : viewControl, local_ui: localUi, ui_context: uiContext.slice(0,500), search_form: searchForm,
       search_submitter_name: searchForm && submitters.length ? accessibleName(submitters[0]) : null,
       download: e.hasAttribute('download'), link_ping: !!normalize(e.getAttribute('ping')),
       name: accessibleName(e),

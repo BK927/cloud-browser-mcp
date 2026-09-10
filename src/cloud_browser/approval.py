@@ -1,7 +1,7 @@
 """Operator-selected approval policy, not a proof that page JavaScript is harmless.
 
 Balanced mode permits a small set of observed navigation/view/search operations.
-Ordinary non-sensitive edits are automatic in balanced-v2. Execution buttons
+Ordinary non-sensitive edits and bounded local UI patterns are automatic in balanced-v3. Execution buttons
 with unclassified effects stay approval-gated. This is not a JS effect proof.
 """
 
@@ -24,6 +24,49 @@ _EDIT_KEYS = frozenset(
 )
 _PRIVILEGED = re.compile(
     r"password|otp|auth.?code|permission|access control|enable access|administrator|credit.?card|api.?key|권한|보안|비밀번호|인증|관리자|カード|権限",
+    re.I,
+)
+_LOCAL_TOOLS = frozenset(
+    {
+        "selection",
+        "select",
+        "rectangle",
+        "diamond",
+        "ellipse",
+        "arrow",
+        "line",
+        "pencil",
+        "free draw",
+        "freedraw",
+        "draw",
+        "hand",
+        "pan",
+        "lasso",
+        "text",
+        "선택",
+        "사각형",
+        "직사각형",
+        "마름모",
+        "타원",
+        "화살표",
+        "선",
+        "연필",
+        "자유 그리기",
+        "손",
+        "텍스트",
+        "選択",
+        "長方形",
+        "楕円",
+        "矢印",
+        "手のひら",
+        "テキスト",
+    }
+)
+_LOCAL_HELP = frozenset(
+    {"help", "keyboard shortcuts", "도움말", "키보드 단축키", "ヘルプ", "キーボードショートカット"}
+)
+_SENSITIVE_UI = re.compile(
+    r"account|privacy|sharing|billing|security|permission|계정|개인정보|공유|결제|보안|권한|アカウント|プライバシー|共有",
     re.I,
 )
 
@@ -150,8 +193,18 @@ def decide(policy, action, meta=None, page_url=""):
         if meta.get("tag") != "a" or not _http(meta["href"]) or _effect(meta["href"]):
             return result(True, "unclassified_or_effectful_link")
         return result(False, "http_navigation")
-    if meta.get("view_control") in ("disclosure", "tab"):
+    if meta.get("view_control") in ("popup",) or meta.get("local_ui"):
+        context = str(meta.get("ui_context", ""))
+        if _PRIVILEGED.search(context) or _SENSITIVE_UI.search(context) or _effect(context):
+            return result(True, "sensitive_ui_context")
+    if meta.get("view_control") in ("disclosure", "tab", "popup"):
         return result(False, "view_control")
+    name = unicodedata.normalize("NFKC", str(meta.get("name", ""))).strip().casefold()
+    if not meta.get("form_action") and not meta.get("href"):
+        if meta.get("local_ui") == "editor_tool" and name in _LOCAL_TOOLS:
+            return result(False, "local_ui_tool_selection")
+        if meta.get("local_ui") == "editor_help" and name in _LOCAL_HELP:
+            return result(False, "local_ui_help")
     if search_form and meta.get("type") in ("checkbox", "radio"):
         return result(False, "search_filter")
     return result(True, "unclassified_activation")

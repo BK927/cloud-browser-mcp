@@ -1,0 +1,17 @@
+<!doctype html><html lang="en"><meta charset="utf-8"><title>Local UI regression fixture</title>
+<main role="application" aria-label="Drawing editor">
+<canvas width="320" height="100"></canvas>
+<div role="toolbar" aria-label="Drawing tools">
+<button type="button" aria-pressed="true" onclick="choose(this)">Selection</button>
+<button type="button" aria-pressed="false" onclick="choose(this)">Rectangle</button>
+<button type="button" aria-pressed="false" onclick="window.writes++">Image</button>
+<button type="button" aria-pressed="false" onclick="window.writes++">Delete drawing</button>
+</div>
+<button type="button" aria-keyshortcuts="F1" onclick="document.querySelector('#help').hidden=false">Help</button>
+<div id="help" role="dialog" hidden>Keyboard help content</div>
+<button type="button" aria-haspopup="menu" aria-controls="menu" onclick="document.querySelector('#menu').hidden=false">View menu</button>
+<div id="menu" role="menu" hidden>Zoom options</div>
+<input aria-label="New Todo Input" onkeydown="if(event.key==='Enter')window.writes++">
+</main>
+<script>window.writes=0;function choose(button){for(const e of document.querySelectorAll('[aria-pressed]'))e.setAttribute('aria-pressed',String(e===button));}</script>
+</html>
