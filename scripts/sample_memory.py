@@ -48,6 +48,16 @@ def sample_group(path):
         result["memory_current"] = int((path / "memory.current").read_text())
         result["memory_max"] = (path / "memory.max").read_text().strip()
         result["memory_swap_current"] = int((path / "memory.swap.current").read_text())
+        result["memory_swap_max"] = (path / "memory.swap.max").read_text().strip()
+        if (path / "memory.peak").exists():
+            result["memory_peak"] = int((path / "memory.peak").read_text())
+        if (path / "memory.pressure").exists():
+            result["memory_pressure"] = {
+                row.split()[0]: {
+                    k: float(v) for field in row.split()[1:] for k, v in [field.split("=")]
+                }
+                for row in (path / "memory.pressure").read_text().splitlines()
+            }
         result["memory_stat"] = counters(path / "memory.stat")
         result["memory_events"] = counters(path / "memory.events")
         if (path / "pids.current").exists():

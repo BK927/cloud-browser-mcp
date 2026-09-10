@@ -14,6 +14,16 @@ def test_same_url_reload_is_a_document_navigation(browser):
     assert not result["url_changed"] and result["navigation_kind"] == "reload"
 
 
+def test_open_navigate_and_close_report_selection_without_list_tabs(browser):
+    adapter, sid, tid, base = browser
+    second = adapter.open(sid)
+    assert second["selected_tab_id"] == second["tab_id"]
+    navigated = adapter.navigate(sid, tid, "goto", base + "/browser.html")
+    assert navigated["selected_tab_id"] == tid
+    closed = adapter.close(sid, "tab", tid)
+    assert closed["selected_tab_id"] == second["tab_id"]
+
+
 @pytest.mark.parametrize(
     "script,subtype",
     [
@@ -70,7 +80,7 @@ def test_target_query_filters_before_result_limit_and_reads_native_search_role(b
         tid,
         mode="interactive",
         lightweight=True,
-        query={"role": "searchbox", "name": "Site search", "limit": 1},
+        query={"role": " searchbox ", "name": " Site   search ", "limit": 1},
     )
     items = [json.loads(line) for line in seen["observation"]["interactive_snapshot"].splitlines()]
     assert len(items) == 1 and items[0]["role"] == "searchbox"

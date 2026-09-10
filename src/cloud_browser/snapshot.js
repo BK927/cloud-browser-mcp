@@ -100,7 +100,7 @@
   // Scoped CSS queries are read-only and may include non-interactive DOM targets.
   // The whole document's privacy guard remains in force.
   const pool = selected || (scope ? (targeted ? scope.querySelectorAll(
-    query.role ? (roleSelectors[query.role.toLowerCase()] || '*') + ',[role]' : '*'
+    query.role ? (roleSelectors[normalize(query.role).toLowerCase()] || '*') + ',[role]' : '*'
   ) : all.filter(e => scope === document || scope.contains(e))) : []);
   const queryScanTruncated = targeted && pool.length > scanBudget;
   const queried = [];
@@ -111,7 +111,7 @@
     if (query.visibility !== 'all' && !visible(e)) continue;
     if (!query.visibility && !inViewport(e)) continue;
     if (query.enabled_only && (e.matches(':disabled') || e.getAttribute('aria-disabled') === 'true')) continue;
-    if (query.role && roleOf(e) !== query.role.toLowerCase()) continue;
+    if (query.role && roleOf(e) !== normalize(query.role).toLowerCase()) continue;
     if ((query.name || query.label) && ![query.name, query.label].filter(Boolean).every(
       text => accessibleName(e).toLowerCase().includes(normalize(text).toLowerCase()))) continue;
     queried.push(e);

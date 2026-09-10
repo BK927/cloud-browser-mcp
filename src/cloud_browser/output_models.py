@@ -65,6 +65,7 @@ class BrowserOutput(OutputModel):
     request_id: str
     session_id: str | None
     tab_id: str | None
+    selected_tab_id: str | None = None
     revision: int | None = Field(description="Use this revision for the next action.")
     page: Page | None
     notices: list[str]

@@ -706,6 +706,7 @@ class DrissionAdapter:
             tab_id=tid,
             revision=state.revision,
             page={"url": safe_url(state.tab.url), "title": redact(state.tab.title or "") or None},
+            selected_tab_id=self._session(sid)["selected"],
             **extra,
         )
 
@@ -851,9 +852,6 @@ class DrissionAdapter:
 
     def navigate(self, session_id, tab_id, operation, url=None):
         state = self._tab(session_id, tab_id)
-        before = self._navigation_marker(state)
-        frame = state.tab.run_cdp("Page.getFrameTree")["frameTree"]["frame"]
-        before["document"] = frame["id"] + ":" + frame.get("loaderId", "")
         expected_entry = None
         expected_loader = None
         previous_loader = None
@@ -865,6 +863,7 @@ class DrissionAdapter:
             history = state.tab.run_cdp("Page.getNavigationHistory")
             index = history["currentIndex"] + (-1 if operation == "back" else 1)
             if index < 0 or index >= len(history["entries"]):
+                before = self._navigation_marker(state)
                 return self._result(
                     session_id,
                     tab_id,
@@ -896,6 +895,10 @@ class DrissionAdapter:
         else:
             raise BrowserError("UNSUPPORTED_OPERATION", "Unknown navigation operation")
 
+        # Validate the destination/egress before any extra browser interrogation.
+        before = self._navigation_marker(state)
+        frame = state.tab.run_cdp("Page.getFrameTree")["frameTree"]["frame"]
+        before["document"] = frame["id"] + ":" + frame.get("loaderId", "")
         # Invalidate observations before dispatch, including navigation that times out.
         self._stop_page_tools(state)
         state.fingerprint = ""
@@ -1050,12 +1053,14 @@ class DrissionAdapter:
                             continue
                         if (
                             query.get("role")
-                            and query["role"].casefold() != str(meta.get("role") or "").casefold()
+                            and query["role"].strip().casefold()
+                            != str(meta.get("role") or "").casefold()
                         ):
                             continue
                         if any(
                             query.get(key)
-                            and query[key].casefold() not in str(meta.get("name") or "").casefold()
+                            and " ".join(query[key].split()).casefold()
+                            not in str(meta.get("name") or "").casefold()
                             for key in ("name", "label")
                         ):
                             continue
