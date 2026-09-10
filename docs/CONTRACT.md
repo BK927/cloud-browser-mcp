@@ -24,6 +24,16 @@ status: `ok`, `no_change`, `confirmation_required`, `user_action_required`, `blo
 JSON/schema 자체가 잘못된 요청은 SDK 단계의 표준 MCP 오류이며 브라우저 실행 전에
 거부됩니다. `request_id`는 서버 추적 ID이고 idempotency key가 아닙니다.
 
+탐색 결과와 관찰이 완료된 `action_result`는 `navigation_occurred` 외에
+`url_changed`, `document_changed`, `navigation_kind`를 반환합니다.
+`navigation_kind`는 `none`, `full_document`, `same_document`, `reload`입니다.
+URL이 같더라도 문서가 교체되면 탐색이며, `reload`는 명시적 reload 요청에 사용합니다.
+클릭이 같은 주소를 다시 불러왔지만 원인을 확정할 수 없으면 `full_document`입니다.
+같은 문서 이동의 `same_document_kind`는 Chromium 이벤트로 확인한 경우에만
+`hash`/`history_api`/`other`이며, 이벤트 근거가 없으면 null입니다.
+문서가 바뀌지 않았다는 사실만으로 사이트의 모든 JS 상태 보존을 보장하지 않습니다.
+`browser_status`는 계속 캐시를 사용하지만 탭 종료 결과의 새 선택 탭도 즉시 반영합니다.
+
 ## 입력
 
 | 도구 | 입력 |

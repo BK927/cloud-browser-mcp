@@ -23,6 +23,7 @@ from .events import Events
 from .image_privacy import mask_frames
 from .input_driver import NativeInput
 from .models import BrowserError
+from .navigation import outcome as navigation_outcome
 from .observation import compact_node, paginate
 from .page_tools import PageTools, schema_fingerprint, scrub_result, validate_arguments
 from .runtime import DisplayRuntime
@@ -48,6 +49,8 @@ class TabState:
     page_tools: object | None = None
     advertised_tools: dict | None = None
     document_key: str = ""
+    same_document_sequence: int = 0
+    same_document_kind: str | None = None
     revision_documents: dict = field(default_factory=dict)
     ax_cache: dict = field(default_factory=dict)
     frame_id: str | None = None
@@ -142,6 +145,15 @@ class DrissionAdapter:
                 state.document_loader = kwargs.get("loaderId")
 
         state.tab._driver.set_callback("Network.requestWillBeSent", request_seen)
+
+        def within_document(frameId=None, navigationType=None, **kwargs):
+            if frameId == getattr(state.tab, "_frame_id", None):
+                state.same_document_sequence += 1
+                state.same_document_kind = {"fragment": "hash", "historyApi": "history_api"}.get(
+                    navigationType, "other"
+                )
+
+        state.tab._driver.set_callback("Page.navigatedWithinDocument", within_document)
         state.tab.run_cdp("Network.enable")
         self._watch_events(state)
 
@@ -815,9 +827,20 @@ class DrissionAdapter:
             ],
         }
 
+    @staticmethod
+    def _navigation_marker(state):
+        return {
+            "url": state.tab.url,
+            "document": state.document_key,
+            "sequence": state.same_document_sequence,
+            "same_document_kind": state.same_document_kind,
+        }
+
     def navigate(self, session_id, tab_id, operation, url=None):
         state = self._tab(session_id, tab_id)
-        old_url = state.tab.url
+        before = self._navigation_marker(state)
+        frame = state.tab.run_cdp("Page.getFrameTree")["frameTree"]["frame"]
+        before["document"] = frame["id"] + ":" + frame.get("loaderId", "")
         expected_entry = None
         expected_loader = None
         previous_loader = None
@@ -836,7 +859,7 @@ class DrissionAdapter:
                     navigation={
                         "operation": operation,
                         "redirected": False,
-                        "navigation_occurred": False,
+                        **navigation_outcome(before, before),
                     },
                 )
             self._validate_url(history["entries"][index]["url"])
@@ -906,7 +929,7 @@ class DrissionAdapter:
             navigation={
                 "operation": operation,
                 "redirected": operation == "goto" and state.tab.url != url,
-                "navigation_occurred": state.tab.url != old_url,
+                **navigation_outcome(before, self._navigation_marker(state), operation=operation),
             },
         )
 
@@ -1483,6 +1506,7 @@ class DrissionAdapter:
     def act(self, session_id, tab_id, expected_revision, action):
         self.prepare(session_id, tab_id, expected_revision, action)
         state = self._tab(session_id, tab_id)
+        before_navigation = self._navigation_marker(state)
         if action["type"] == "dialog":
             try:
                 state.tab.handle_alert(
@@ -1505,10 +1529,10 @@ class DrissionAdapter:
                 action_result={
                     "performed": True,
                     "page_changed": True,
-                    "navigation_occurred": False,
+                    **navigation_outcome(before_navigation, self._navigation_marker(state)),
                 },
             )
-        before_url, before_fp = state.tab.url, state.fingerprint
+        before_fp = state.fingerprint
         before_frames = state.frames_fingerprint
         old_tabs = set(self._session(session_id)["tabs"])
         typ = action["type"]
@@ -1716,7 +1740,7 @@ class DrissionAdapter:
             action_result={
                 "performed": performed,
                 "page_changed": changed,
-                "navigation_occurred": before_url != state.tab.url,
+                **navigation_outcome(before_navigation, self._navigation_marker(state)),
                 "new_tab_ids": added,
             },
         )
@@ -2009,6 +2033,7 @@ class DrissionAdapter:
             self._stop_page_tools(current)
             self._pause_events(current)
             current.tab._driver.set_callback("Network.requestWillBeSent", None)
+            current.tab._driver.set_callback("Page.navigatedWithinDocument", None)
             current.tab.run_cdp("Network.disable")
             current.document_method = None
             current.document_loader = None

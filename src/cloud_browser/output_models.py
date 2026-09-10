@@ -13,6 +13,8 @@ from pydantic import BaseModel, ConfigDict, Field
 def _compact_schema(schema: dict[str, Any]) -> None:
     """Remove generated display noise, visiting schemas rather than property names."""
     schema.pop("title", None)
+    if schema.get("additionalProperties") is True:
+        schema.pop("additionalProperties")  # JSON Schema's default; retain false/schema values.
     if schema.get("default", ...) is None:
         schema.pop("default")
     for keyword in ("properties", "$defs", "patternProperties", "dependentSchemas"):
@@ -73,7 +75,14 @@ class BrowserOutput(OutputModel):
     busy_reason: str | None = None
 
 
-class Navigation(OutputModel):
+class NavigationDetails(OutputModel):
+    url_changed: bool | None = None
+    document_changed: bool | None = None
+    navigation_kind: Literal["none", "full_document", "same_document", "reload"] | None = None
+    same_document_kind: Literal["hash", "history_api", "other"] | None = None
+
+
+class Navigation(NavigationDetails):
     operation: Literal["goto", "back", "forward", "reload"]
     redirected: bool
     navigation_occurred: bool
@@ -200,7 +209,7 @@ class Confirmation(OutputModel):
     action_policy: ActionPolicy | None = None
 
 
-class ActionResult(OutputModel):
+class ActionResult(NavigationDetails):
     performed: bool
     page_changed: bool | None = None
     navigation_occurred: bool | None = None

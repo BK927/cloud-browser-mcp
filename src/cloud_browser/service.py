@@ -249,6 +249,11 @@ class BrowserService:
             if method == "close" and sid in self.tab_cache:
                 cached = self.tab_cache[sid]
                 cached["tabs"] = [x for x in cached["tabs"] if x["tab_id"] != args.get("tab_id")]
+            if sid in self.tab_cache and "selected_tab_id" in result:
+                cached = self.tab_cache[sid]
+                cached["selected_tab_id"] = result["selected_tab_id"]
+                for row in cached["tabs"]:
+                    row["selected"] = row["tab_id"] == result["selected_tab_id"]
             if sid in self.tab_cache:
                 self.tab_cache[sid]["tabs_observed_at"] = iso(time.time())
             return result
@@ -1206,6 +1211,7 @@ class BrowserService:
             "select_options": True,
             "scroll_containers": True,
             "history_policy": "observed-get-only",
+            "navigation_details": "document-identity-and-same-document-events-v1",
             "duplicate_action_policy": "exact-session-tab-revision-action",
             "pagination": "revision-bound-complete-nodes",
             "approval_policy": "strict-per-action"
