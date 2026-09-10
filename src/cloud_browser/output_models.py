@@ -152,6 +152,7 @@ class Observation(OutputModel):
     semantic_truncated: bool | None = None
     interactive_page_truncated: bool | None = None
     interactive_truncated: bool | None = None
+    query_scan_truncated: bool | None = None
     semantic_source: str | None = None
     semantic_source_truncated: bool | None = None
     accessibility_source: str | None = None

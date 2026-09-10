@@ -306,13 +306,13 @@ class DrissionAdapter:
             else:
                 # Reuse names by actual backend and DOM signature. Never request an
                 # unbounded full AX tree on a large page just to read 60 controls.
-                ax_budget = 0 if lightweight else 60
+                ax_budget = (12 if state.query else 0) if lightweight else 60
                 new_cache = {}
                 for bid, meta in zip(backends, data["nodes"], strict=True):
                     try:
                         cache_key = (bid, self._node_signature(meta))
                         current = state.ax_cache.get(cache_key)
-                        if current is None and ax_budget:
+                        if not current and ax_budget:
                             ax_budget -= 1
                             ax = tab.run_cdp(
                                 "Accessibility.getPartialAXTree",
@@ -330,6 +330,7 @@ class DrissionAdapter:
                         new_cache[cache_key] = current or {}
                         if current:
                             meta["_dom_name"] = meta["name"]
+                            meta["_dom_role"] = meta["role"]
                             meta["name"] = " ".join(
                                 str(current.get("name", {}).get("value") or meta["name"]).split()
                             )[:500]
@@ -340,6 +341,8 @@ class DrissionAdapter:
                                     meta[key] = (
                                         str(value).lower() if isinstance(value, bool) else value
                                     )
+                        else:
+                            data["accessibility_source"] = "dom-fallback"
                     except Exception:
                         data["accessibility_source"] = "dom-fallback"
                 state.ax_cache = new_cache
@@ -495,6 +498,8 @@ class DrissionAdapter:
                         restricted = True
                         masks.append(region)
                         continue
+                    if state.query.get("_all_frames"):
+                        child.query = dict(state.query)
                     self._capture_state(child, mode=mode, lightweight=lightweight)
                     entry["origin"] = (
                         origin(child.data["url"])
@@ -550,6 +555,10 @@ class DrissionAdapter:
         state.frame_states = {
             key: child for key, child in state.frame_states.items() if key in visited
         }
+        for key in ("interactive_truncated", "query_scan_truncated"):
+            data[key] = bool(data.get(key)) or any(
+                child.data.get(key) for child in state.frame_states.values()
+            )
         frame_fp = hashlib.sha256(
             json.dumps(
                 [
@@ -664,10 +673,14 @@ class DrissionAdapter:
         # Layout and focus changes do not turn the same element into another one.
         # Native state, accessible meaning and the owning form's digest do.
         value = {
-            k: v for k, v in meta.items() if k not in ("rect", "focused", "scroll", "_dom_name")
+            k: v
+            for k, v in meta.items()
+            if k not in ("rect", "focused", "scroll", "in_viewport", "_dom_name", "_dom_role")
         }
         if "_dom_name" in meta:
             value["name"] = meta["_dom_name"]
+        if "_dom_role" in meta:
+            value["role"] = meta["_dom_role"]
         return json.dumps(value, sort_keys=True)
 
     @staticmethod
@@ -986,8 +999,13 @@ class DrissionAdapter:
         cursor=None,
         lightweight=False,
         query=None,
+        _wait_state=None,
     ):
         state = self._tab(session_id, tab_id)
+        if not cursor:
+            state.query = {}
+            for child in state.frame_states.values():
+                child.query = {}
         if query is not None:
             target_frame = query.get("frame_id")
             if target_frame and target_frame not in state.frame_states:
@@ -997,8 +1015,15 @@ class DrissionAdapter:
             (state.frame_states[target_frame] if target_frame else state).query = {
                 k: v
                 for k, v in query.items()
-                if k in ("scope", "selector", "limit") and v is not None
+                if k in ("scope", "selector", "limit", "role", "name", "label") and v is not None
             }
+            target_query = (state.frame_states[target_frame] if target_frame else state).query
+            target_query["_all_frames"] = not target_frame
+            if _wait_state:
+                target_query["visibility"] = (
+                    "all" if _wait_state in ("present", "absent") else "rendered"
+                )
+                target_query["enabled_only"] = _wait_state == "enabled"
         elif not cursor:
             state.query = {}
             for child in state.frame_states.values():
@@ -1023,11 +1048,15 @@ class DrissionAdapter:
                     if query:
                         if query.get("frame_id") and meta.get("frame_id") != query["frame_id"]:
                             continue
+                        if (
+                            query.get("role")
+                            and query["role"].casefold() != str(meta.get("role") or "").casefold()
+                        ):
+                            continue
                         if any(
                             query.get(key)
-                            and query[key].casefold()
-                            not in str(meta.get("name" if key == "label" else key) or "").casefold()
-                            for key in ("role", "name", "label")
+                            and query[key].casefold() not in str(meta.get("name") or "").casefold()
+                            for key in ("name", "label")
                         ):
                             continue
                     clean = {
@@ -1067,6 +1096,7 @@ class DrissionAdapter:
             screenshot=None,
             viewport=data["viewport"],
             interactive_truncated=data["interactive_truncated"],
+            query_scan_truncated=data.get("query_scan_truncated", False),
             semantic_source=data["semantic_source"],
             semantic_source_truncated=data["semantic_source_truncated"],
             accessibility_source=data["accessibility_source"],
@@ -1922,6 +1952,7 @@ class DrissionAdapter:
                     max_chars=8000,
                     lightweight=True,
                     query=condition.get("query"),
+                    _wait_state=condition.get("state", "present"),
                 )
                 if typ == "url":
                     matched = state.tab.url == condition["value"]

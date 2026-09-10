@@ -1208,6 +1208,7 @@ class BrowserService:
             "image_content": True,
             "observation_format": "rendered-main-v1",
             "accessibility": "chromium-ax-with-dom-fallback",
+            "targeted_query": "bounded-semantic-targets-v1",
             "select_options": True,
             "scroll_containers": True,
             "history_policy": "observed-get-only",

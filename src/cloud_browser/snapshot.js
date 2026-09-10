@@ -7,7 +7,7 @@
   let scope = document, selected = null;
   try {
     if (query.scope) scope = document.querySelector(query.scope);
-    if (query.selector) selected = scope ? [...scope.querySelectorAll(query.selector)] : [];
+    if (query.selector) selected = scope ? scope.querySelectorAll(query.selector) : [];
   } catch (_) { return {data:{query_error:true},elements:[],frame_elements:[]}; }
   // Executed in a CDP isolated world. Never invoke page handlers while observing.
   if (!globalThis.__cloudBrowserState) {
@@ -54,25 +54,70 @@
     return (/auto|scroll/.test(s.overflowY) && e.scrollHeight > e.clientHeight) ||
       (/auto|scroll/.test(s.overflowX) && e.scrollWidth > e.clientWidth);
   };
-  const all = [...document.querySelectorAll('a,button,summary,input,textarea,select,[role=button],[role=checkbox],[role=tab],[role=link],[tabindex],[contenteditable=true]')]
+  const accessibleName = e => {
+    const label = [...(e.labels || [])].slice(0, 4).map(l => l.innerText || l.textContent || '').join(' ');
+    const labelledBy = (e.getAttribute('aria-labelledby') || '').split(/\s+/).slice(0, 16)
+      .map(id => document.getElementById(id)?.textContent || '').join(' ');
+    return normalize(normalize(labelledBy) || e.getAttribute('aria-label') || label || e.innerText ||
+      (e.tagName === 'IMG' ? e.alt : '') || e.querySelector('img[alt]')?.alt ||
+      e.getAttribute('title') || e.placeholder || '').slice(0, 500);
+  };
+  // Bounded native-role fallback also works before the first AX-enriched observation.
+  const roleOf = e => {
+    const explicit = normalize(e.getAttribute('role'));
+    if (explicit) return explicit.split(' ')[0].toLowerCase();
+    const tag = e.tagName;
+    if (/^H[1-6]$/.test(tag)) return 'heading';
+    if (tag === 'INPUT') {
+      if (e.hasAttribute('list') && ['text','search','email','url','tel'].includes(e.type)) return 'combobox';
+      return ({search:'searchbox',checkbox:'checkbox',radio:'radio',range:'slider',number:'spinbutton',
+        button:'button',submit:'button',reset:'button',image:'button',hidden:null})[e.type] ??
+        (['text','email','url','tel','password'].includes(e.type) ? 'textbox' : null);
+    }
+    if (tag === 'SELECT') return e.multiple || e.size > 1 ? 'listbox' : 'combobox';
+    if (tag === 'A') return e.hasAttribute('href') ? 'link' : null;
+    return ({BUTTON:'button',SUMMARY:'button',TEXTAREA:'textbox',IMG:'img',OPTION:'option',
+      NAV:'navigation',MAIN:'main',ASIDE:'complementary',DIALOG:'dialog',ARTICLE:'article',
+      UL:'list',OL:'list',LI:'listitem',TABLE:'table',TR:'row',TD:'cell',TH:'columnheader',
+      PROGRESS:'progressbar',METER:'meter',SEARCH:'search'})[tag] || (e.isContentEditable ? 'textbox' : null);
+  };
+  const targeted = !!(query.selector || query.role || query.name || query.label);
+  const roleSelectors = {heading:'h1,h2,h3,h4,h5,h6',button:'button,summary,input',
+    textbox:'input,textarea,[contenteditable=true]',searchbox:'input',combobox:'input,select',
+    listbox:'select',checkbox:'input',radio:'input',link:'a[href]',img:'img',
+    navigation:'nav',main:'main',dialog:'dialog',list:'ul,ol',listitem:'li',table:'table',
+    row:'tr',cell:'td',columnheader:'th',option:'option',search:'search'};
+  const controlSelector = 'a,button,summary,input,textarea,select,[role=button],[role=checkbox],[role=tab],[role=link],[tabindex],[contenteditable=true]';
+  const all = targeted ? [] : [...document.querySelectorAll(controlSelector)]
     .filter(e => visible(e) && inViewport(e) && !sensitive(e));
   // Include ordinary div-based scroll panes, without an unbounded layout scan.
-  const candidates = document.querySelectorAll('*');
+  const candidates = targeted ? [] : document.querySelectorAll('*');
   const known = new Set(all);
-  for (let i = 0; i < Math.min(candidates.length, scanBudget); i++) {
+  for (let i = 0; !targeted && i < Math.min(candidates.length, scanBudget); i++) {
     const e = candidates[i];
     if (!known.has(e) && visible(e) && inViewport(e) && scrollable(e)) { all.push(e); known.add(e); }
   }
   // Scoped CSS queries are read-only and may include non-interactive DOM targets.
   // The whole document's privacy guard remains in force.
-  const queried = selected || (scope ? all.filter(e => scope === document || scope.contains(e)) : []);
-  const elements = queried.filter(e => visible(e) && inViewport(e) && !sensitive(e)).slice(0, Math.min(nodeBudget,query.limit || nodeBudget));
-  const accessibleName = e => {
-    const label = e.labels?.[0] ? [...e.labels[0].childNodes].filter(n => n.nodeType === Node.TEXT_NODE).map(n => n.textContent).join(' ') : '';
-    const labelledBy = (e.getAttribute('aria-labelledby') || '').split(/\s+/).map(id => document.getElementById(id)?.innerText || '').join(' ');
-    return normalize(e.getAttribute('aria-label') || normalize(labelledBy) || label || e.innerText ||
-      e.querySelector('img[alt]')?.alt || e.getAttribute('title') || e.placeholder || '').slice(0, 500);
-  };
+  const pool = selected || (scope ? (targeted ? scope.querySelectorAll(
+    query.role ? (roleSelectors[query.role.toLowerCase()] || '*') + ',[role]' : '*'
+  ) : all.filter(e => scope === document || scope.contains(e))) : []);
+  const queryScanTruncated = targeted && pool.length > scanBudget;
+  const queried = [];
+  for (let i = 0; i < Math.min(pool.length, targeted ? scanBudget : pool.length); i++) {
+    const e = pool[i];
+    if (sensitive(e)) continue;
+    if (targeted && !query.selector && !roleOf(e) && !e.hasAttribute('aria-label') && !e.hasAttribute('aria-labelledby')) continue;
+    if (query.visibility !== 'all' && !visible(e)) continue;
+    if (!query.visibility && !inViewport(e)) continue;
+    if (query.enabled_only && (e.matches(':disabled') || e.getAttribute('aria-disabled') === 'true')) continue;
+    if (query.role && roleOf(e) !== query.role.toLowerCase()) continue;
+    if ((query.name || query.label) && ![query.name, query.label].filter(Boolean).every(
+      text => accessibleName(e).toLowerCase().includes(normalize(text).toLowerCase()))) continue;
+    queried.push(e);
+  }
+  // Apply the result limit AFTER the scoped role/name match, not before it.
+  const elements = queried.slice(0, Math.min(nodeBudget,query.limit || nodeBudget));
   const formIds = new Map(), ownForms = [];
   const formId = form => {
     if (!form || protectedPage || !formStateComplete) return null;
@@ -119,7 +164,8 @@
     const searchContext = /search|검색|検索/i.test(accessibleName(e)) &&
       (role === 'combobox' || role === 'searchbox' || e.type === 'search') &&
       (!!e.closest('[role=search],search') || !!e.getAttribute('aria-controls') || role === 'searchbox' || e.type === 'search');
-    return {tag: e.tagName.toLowerCase(), type: e.type || '', role: e.getAttribute('role'),
+    return {tag: e.tagName.toLowerCase(), type: e.type || '', role: roleOf(e),
+      visible: visible(e), in_viewport: inViewport(e),
       search_context: searchContext,
       view_control: viewControl, search_form: searchForm,
       search_submitter_name: searchForm && submitters.length ? accessibleName(submitters[0]) : null,
@@ -225,6 +271,7 @@
       (/automated queries|automated traffic|automation access.*blocked/i.test(bodyText) ? 'bot' : null),
     has_iframe: !!document.querySelector('iframe,frame,object,embed'), iframe_regions: frames,
     has_canvas: !!document.querySelector('canvas,video'),
-    interactive_truncated: queried.length > elements.length,
-    scroll_scan_truncated: candidates.length > scanBudget}};
+    interactive_truncated: queryScanTruncated || queried.length > elements.length,
+    query_scan_truncated: queryScanTruncated,
+    scroll_scan_truncated: !targeted && candidates.length > scanBudget}};
 })()
