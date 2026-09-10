@@ -4,6 +4,7 @@ import asyncio
 import base64
 import hashlib
 import http.server
+import json
 import os
 import socket
 import threading
@@ -277,14 +278,35 @@ def test_real_oauth_form_reaches_cross_origin_callback(oauth_browser):
 def test_real_oauth_csp_blocks_unregistered_form_target(oauth_browser, destination):
     case = oauth_browser
     tab = case.tab
-    tab.get(case.cfg.public_origin + "/authorize?" + urlencode(case.params))
+    url = case.cfg.public_origin + "/authorize?" + urlencode(case.params)
+    tab.get(url)
+    # Inspect the current execution context, not DrissionPage's previous cached
+    # document handle. Only read-only readiness is polled; mutation/submission run once.
+    deadline = time.monotonic() + 5
+    while True:
+        ready = tab.run_cdp(
+            "Runtime.evaluate",
+            expression="location.href==="
+            + json.dumps(url)
+            + "&&document.readyState==='complete'&&!!document.querySelector('form input[name=password]')",
+            returnByValue=True,
+        )
+        if ready.get("result", {}).get("value") is True:
+            break
+        assert time.monotonic() < deadline, "OAuth fixture document did not become ready"
+        time.sleep(0.02)
     target = case.params["redirect_uri"]
     target = (
         target.replace("127.0.0.1", "localhost")
         if destination == "other-origin"
         else target + "/unregistered"
     )
-    tab.run_js("document.querySelector('form').action=arguments[0]", target)
+    changed = tab.run_cdp(
+        "Runtime.evaluate",
+        expression="document.querySelector('form').action=" + json.dumps(target),
+        returnByValue=True,
+    )
+    assert changed.get("result", {}).get("value") == target
     tab.ele("css:input[name=password]").input("test administrator password")
     tab.ele("css:button").click()
     assert not case.arrived.wait(1)

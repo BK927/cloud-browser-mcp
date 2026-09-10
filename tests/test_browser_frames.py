@@ -63,7 +63,19 @@ def test_cross_origin_frame_input_uses_its_own_context(browser):
         "document.body.innerHTML='<iframe style=width:600px;height:400px></iframe>';document.querySelector('iframe').src=arguments[0]",
         cross_origin,
     )
-    time.sleep(0.3)
+    # Cross-origin target attachment can follow load by more than 300 ms. Wait
+    # read-only for the actual child control; never repeat the eventual input.
+    ready = adapter.wait(
+        sid,
+        tid,
+        {
+            "type": "element",
+            "query": {"role": "searchbox", "name": "Frame query"},
+            "state": "visible",
+        },
+        5000,
+    )
+    assert ready["wait"]["matched"], ready["wait"]
     seen = adapter.observe(sid, tid, max_chars=100000)
     assert seen["observation"]["frames"][0]["readable"], seen["observation"]["frames"]
     nodes = [json.loads(line) for line in seen["observation"]["interactive_snapshot"].splitlines()]
