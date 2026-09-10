@@ -1,4 +1,5 @@
 import importlib.util
+import io
 import json
 from pathlib import Path
 from types import SimpleNamespace
@@ -13,8 +14,9 @@ spec.loader.exec_module(module)
 
 
 class Client:
-    def __init__(self, *, foreign=0, limit=1024, fail=None):
+    def __init__(self, *, foreign=0, limit=1024, fail=None, paused=False):
         self.foreign, self.limit, self.fail = foreign, limit, fail
+        self.paused = paused
         self.owned, self.calls, self.counter = {}, [], 0
 
     async def call_tool(self, name, args):
@@ -22,7 +24,10 @@ class Client:
         value = {"status": "ok"}
         if name == "browser_status":
             value.update(
-                scheduler={"active_sessions": self.foreign + len(self.owned)},
+                scheduler={
+                    "active_sessions": self.foreign + len(self.owned),
+                    "automation_paused": self.paused,
+                },
                 resources={
                     "cgroup_limit_mb": self.limit,
                     "cgroup_used_mb": 100 + len(self.owned) * 200,
@@ -101,3 +106,73 @@ async def test_one_cleanup_failure_does_not_skip_another_work():
     assert len(client.owned) == 1 and "private_session_2" in client.owned
     assert len([x for x in client.calls if x[0] == "browser_close"]) == 2
     assert "must-not-leak-secret" not in json.dumps(result)
+
+
+async def test_pause_flag_prevents_start_even_without_state_string():
+    client = Client(paused=True)
+    result = await run(client)
+    assert result["reason"] == "HUMAN_CONTROL"
+    assert client.counter == 0
+
+
+async def test_cli_uses_real_sdk_transport_without_network_or_persistent_auth(monkeypatch, capsys):
+    client = Client()
+    http_client = module.httpx2.AsyncClient
+    original_probe = module.probe
+
+    async def handler(request):
+        assert request.headers["authorization"] == "Bearer fixture-token-only"
+        if request.method != "POST":
+            return module.httpx2.Response(405)
+        message = json.loads(await request.aread())
+        if "id" not in message:
+            return module.httpx2.Response(202)
+        method = message["method"]
+        if method == "initialize":
+            result = {
+                "protocolVersion": message["params"]["protocolVersion"],
+                "capabilities": {"tools": {}},
+                "serverInfo": {"name": "offline-fixture", "version": "1"},
+            }
+        elif method == "tools/list":
+            result = {"tools": []}
+        else:
+            assert method == "tools/call"
+            raw = await client.call_tool(message["params"]["name"], message["params"]["arguments"])
+            content = [{"type": "text", "text": json.dumps(raw.structured_content)}]
+            if raw.content:
+                content.append(
+                    {
+                        "type": "image",
+                        "mimeType": "image/png",
+                        "data": "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jWZkAAAAASUVORK5CYII=",
+                    }
+                )
+            result = {"content": content, "structuredContent": raw.structured_content}
+        return module.httpx2.Response(
+            200, json={"jsonrpc": "2.0", "id": message["id"], "result": result}
+        )
+
+    async def quick_probe(*args, **kwargs):
+        return await original_probe(*args, **kwargs, settle_seconds=0)
+
+    monkeypatch.setattr(
+        module.httpx2,
+        "AsyncClient",
+        lambda **kwargs: http_client(transport=module.httpx2.MockTransport(handler), **kwargs),
+    )
+    monkeypatch.setattr(module, "probe", quick_probe)
+    monkeypatch.setattr(module.sys, "stdin", io.StringIO("fixture-token-only\n"))
+    code = await module.main(
+        SimpleNamespace(
+            endpoint="https://offline.example/mcp",
+            mode="dual",
+            url="https://example.com/",
+            budget_mb=1024,
+            label="fixture",
+            repeat=1,
+        )
+    )
+    output = capsys.readouterr().out
+    assert code == 0 and json.loads(output)["result"] == "completed"
+    assert "fixture-token-only" not in output and not client.owned

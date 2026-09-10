@@ -12,7 +12,7 @@ import sys
 import time
 from urllib.parse import urlsplit
 
-import httpx
+import httpx2
 from mcp import ClientSession
 from mcp.client.streamable_http import streamable_http_client
 
@@ -90,7 +90,7 @@ async def probe(client, *, mode, url, budget_mb=1024, settle_seconds=2, sleep=as
             raise ProbeStop("BUDGET_MISMATCH")
         if scheduler.get("active_sessions") != (len(owned) if expected is None else expected):
             raise ProbeStop("FOREIGN_OR_UNACCOUNTED_WORK")
-        if scheduler.get("state") == "user_control" or scheduler.get("human_control_pause"):
+        if scheduler.get("state") == "user_control" or scheduler.get("automation_paused"):
             raise ProbeStop("HUMAN_CONTROL")
 
     async def close_owned(work):
@@ -185,7 +185,7 @@ async def main(args):
     token = sys.stdin.readline().strip()
     if not token or len(token) > 8192:
         raise ValueError("Provide one temporary bearer token through stdin, not argv")
-    async with httpx.AsyncClient(headers={"Authorization": "Bearer " + token}, timeout=35) as http:
+    async with httpx2.AsyncClient(headers={"Authorization": "Bearer " + token}, timeout=35) as http:
         async with streamable_http_client(args.endpoint, http_client=http) as streams:
             async with ClientSession(*streams) as client:
                 await client.initialize()
