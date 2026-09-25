@@ -1,5 +1,19 @@
 # Expanded operations (contract 0.4 draft)
 
+## Authentication lifetimes
+
+OAuth access tokens last 15 minutes by default. A refresh token and its grant
+now renew together when ChatGPT refreshes a live connection: the idle lifetime
+is 30 days (`CB_REFRESH_TTL=2592000`), with an absolute 90-day limit from the
+grant's creation (`CB_GRANT_MAX_TTL=7776000`). A revoked or expired grant cannot
+be renewed. Existing live grants are migrated on their next refresh; a grant
+that already expired still requires the normal authorization flow. Changing
+these settings does not rotate credentials or clear the authentication store.
+
+The private operator console has a separate eight-hour login cookie
+(`CB_CONTROL_SESSION_TTL=28800`). This is not the browser work lifetime:
+`CB_SESSION_TTL=3600` still expires idle browser work after one hour.
+
 All session calls require the authenticated work's `lease_id`. The MCP tool
 schema is authoritative for input bounds. These additions use the existing
 worker, node validation, human-control lock and approval/execution journal.

@@ -95,7 +95,7 @@ def control_app(cfg, auth, service):
         if not await auth.password_ok(str(form.get("password", ""))):
             return JSONResponse({"error": "Login denied"}, status_code=403)
         token = secrets.token_urlsafe(32)
-        auth.store.put("control", token, {"csrf": secrets.token_urlsafe(32)}, 3600)
+        auth.store.put("control", token, {"csrf": secrets.token_urlsafe(32)}, cfg.control_session_ttl)
         result = RedirectResponse("/", status_code=303)
         result.set_cookie(
             "cb_control",
@@ -103,7 +103,7 @@ def control_app(cfg, auth, service):
             secure=not cfg.development,
             httponly=True,
             samesite="strict",
-            max_age=3600,
+            max_age=cfg.control_session_ttl,
         )
         result.delete_cookie("cb_login", path="/login")
         return result
