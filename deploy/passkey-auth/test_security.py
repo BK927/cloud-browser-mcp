@@ -254,8 +254,8 @@ def test_remove_lost_device_revokes_its_sessions_and_keeps_last_key(system):
     assert store.credential(last)
 
 
-@pytest.mark.parametrize("location", ["https://evil.example/connector_platform_oauth_redirect", 
-    "https://chatgpt.com@evil.example/connector_platform_oauth_redirect", 
+@pytest.mark.parametrize("location", ["https://evil.example/connector_platform_oauth_redirect",
+    "https://chatgpt.com@evil.example/connector_platform_oauth_redirect",
     "http://chatgpt.com/connector_platform_oauth_redirect", "https://chatgpt.com:443/connector_platform_oauth_redirect",
     "https://chatgpt.com/other-path", "https://chatgpt.com/connector_platform_oauth_redirect\r\nX: y"])
 def test_callback_allowlist(location):
