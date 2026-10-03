@@ -1,6 +1,7 @@
 import base64
 import hashlib
 import re
+import time
 from urllib.parse import parse_qs, urlsplit
 
 from conftest import FakeWorker
@@ -8,6 +9,7 @@ from fastapi.testclient import TestClient
 
 from cloud_browser.security import public_document_csp
 from cloud_browser.server import create_apps
+from cloud_browser.store import digest
 
 
 def authorize(client, cfg):
@@ -83,6 +85,72 @@ def test_oauth_pkce_rotation_revocation_and_endpoint_separation(cfg):
         assert not auth.bearer("Bearer " + rotated["access_token"])
 
 
+def test_refresh_renews_live_grant_without_extending_absolute_limit(cfg):
+    cfg.refresh_ttl = 600
+    cfg.grant_max_ttl = 1800
+    public, _, _, auth = create_apps(cfg, worker=FakeWorker())
+    with TestClient(public, base_url=cfg.public_origin) as client:
+        first = client.post("/token", data=authorize(client, cfg)).json()
+        grant = auth.store.get("refresh", first["refresh_token"])["grant"]
+        # Reproduce an older grant with little time left while its refresh
+        # token is still valid. A refresh must renew that grant in place.
+        auth.store.db.execute(
+            "UPDATE kv SET expires=? WHERE kind='grant' AND key=?",
+            (time.time() + 30, digest(grant)),
+        )
+        form = {
+            "grant_type": "refresh_token",
+            "refresh_token": first["refresh_token"],
+            "client_id": cfg.oauth_client_id,
+            "resource": cfg.resource,
+        }
+        refreshed = client.post("/token", data=form)
+        assert refreshed.status_code == 200
+        second = refreshed.json()
+        assert client.post("/token", data=form).status_code == 400
+        expires = auth.store.db.execute(
+            "SELECT expires FROM kv WHERE kind='grant' AND key=?", (digest(grant),)
+        ).fetchone()[0]
+        assert expires > time.time() + 500
+        original_absolute = auth.store.get("grant", grant)["absolute_expires_at"]
+        next_form = form | {"refresh_token": second["refresh_token"]}
+        third = client.post("/token", data=next_form)
+        assert third.status_code == 200
+        assert auth.store.get("grant", grant)["absolute_expires_at"] == original_absolute
+
+        # A still-present refresh token cannot revive a grant past its
+        # maximum lifetime, even if the SQLite row has not yet expired.
+        record = auth.store.get("grant", grant)
+        record["absolute_expires_at"] = time.time() - 1
+        auth.store.put("grant", grant, record, 600)
+        capped = client.post(
+            "/token", data=next_form | {"refresh_token": third.json()["refresh_token"]}
+        )
+        assert capped.status_code == 400
+        assert capped.json()["error"] == "invalid_grant"
+
+
+def test_refresh_migrates_an_existing_live_grant(cfg):
+    public, _, _, auth = create_apps(cfg, worker=FakeWorker())
+    auth.store.put("grant", "legacy-grant", {"active": True}, 600)
+    old = auth.issue("legacy-grant")
+    with TestClient(public, base_url=cfg.public_origin) as client:
+        result = client.post(
+            "/token",
+            data={
+                "grant_type": "refresh_token",
+                "refresh_token": old["refresh_token"],
+                "client_id": cfg.oauth_client_id,
+                "resource": cfg.resource,
+            },
+        )
+        assert result.status_code == 200
+        migrated = auth.store.get("grant", "legacy-grant")
+        assert migrated["active"] is True
+        assert migrated["absolute_expires_at"] > migrated["created_at"]
+        assert auth.bearer("Bearer " + result.json()["access_token"])
+
+
 def test_oauth_rejects_wrong_pkce_and_callbacks(cfg):
     public, _, _, _ = create_apps(cfg, worker=FakeWorker())
     with TestClient(public, base_url=cfg.public_origin) as client:
@@ -133,6 +201,7 @@ def test_console_cookie_and_csrf_required(cfg):
             follow_redirects=False,
         )
         assert result.status_code == 303
+        assert f"max-age={cfg.control_session_ttl}" in result.headers["set-cookie"].lower()
         assert client.get("/").status_code == 200
         assert (
             client.post("/revoke-all", data={}, headers={"Origin": cfg.control_origin}).status_code

@@ -1,0 +1,43 @@
+{
+  "origin": "https://home-mcp.example.test",
+  "database": "/home/mcp/.local/state/mcp-passkey-auth/state.sqlite3",
+  "device_bound": false,
+  "services": [
+    {
+      "id": "youtube",
+      "name": "YouTube MCP",
+      "login_url": "http://127.0.0.1:8080/oauth/login",
+      "host": "home-mcp.example.test",
+      "environment_file": "/home/mcp/.config/youtube-mcp-aio/env",
+      "public_login": "/oauth/login"
+    },
+    {
+      "id": "steam",
+      "name": "Steam MCP",
+      "login_url": "http://127.0.0.1:8082/oauth/login",
+      "host": "home-mcp.example.test",
+      "environment_file": "/home/mcp/.config/steam-mcp/env",
+      "public_login": "/steam/oauth/login"
+    },
+    {
+      "id": "browser",
+      "name": "Cloud Browser MCP",
+      "kind": "cloud-browser-oauth",
+      "login_url": "http://127.0.0.1:8000/authorize",
+      "host": "home-mcp.example.test",
+      "environment_file": "/home/mcp/.config/mcp-passkey-auth/cloud-browser-bridge.env",
+      "public_login": "/browser/authorize"
+    },
+    {
+      "id": "browser-control",
+      "name": "Cloud Browser console",
+      "kind": "cloud-browser-control",
+      "login_url": "http://127.0.0.1:8001/login",
+      "host": "home-mcp.example.test:9443",
+      "environment_file": "/home/mcp/.config/mcp-passkey-auth/cloud-browser-bridge.env",
+      "public_login": "/login",
+      "public_port": 9443,
+      "private": true
+    }
+  ]
+}

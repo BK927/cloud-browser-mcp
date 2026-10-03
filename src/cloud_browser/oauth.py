@@ -15,6 +15,7 @@ from argon2.exceptions import InvalidHashError, VerificationError
 from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 
+from .bridge_proof import verify as verify_passkey_proof
 from .config import Settings
 from .security import public_document_csp
 from .store import Store
@@ -59,7 +60,7 @@ class Auth:
             return None
         return token
 
-    def issue(self, grant: str):
+    def issue(self, grant: str, refresh_ttl: float | None = None):
         access, refresh = secrets.token_urlsafe(32), secrets.token_urlsafe(48)
         record = {
             "grant": grant,
@@ -67,7 +68,10 @@ class Auth:
             "client_id": self.cfg.oauth_client_id,
         }
         self.store.put("access", access, record, self.cfg.access_ttl)
-        self.store.put("refresh", refresh, record, self.cfg.refresh_ttl)
+        self.store.put(
+            "refresh", refresh, record,
+            self.cfg.refresh_ttl if refresh_ttl is None else refresh_ttl,
+        )
         return {
             "access_token": access,
             "token_type": "Bearer",
@@ -164,7 +168,10 @@ class Auth:
             if (
                 not q
                 or q.get("resource") != cfg.resource
-                or not await self.password_ok(str(form.get("password", "")))
+                or not (
+                    verify_passkey_proof(cfg.passkey_bridge_secret, nonce, "oauth", str(form.get("passkey_assertion", "")))
+                    or await self.password_ok(str(form.get("password", "")))
+                )
             ):
                 return JSONResponse({"error": "access_denied"}, status_code=403)
             code = secrets.token_urlsafe(32)
@@ -202,19 +209,49 @@ class Auth:
                 ):
                     return bad
                 grant = secrets.token_urlsafe(32)
-                self.store.put("grant", grant, {"active": True}, cfg.refresh_ttl)
+                now = time.time()
+                self.store.put(
+                    "grant", grant,
+                    {"active": True, "created_at": now, "absolute_expires_at": now + cfg.grant_max_ttl},
+                    cfg.refresh_ttl,
+                )
+                remaining = cfg.refresh_ttl
             elif f.get("grant_type") == "refresh_token":
-                q = self.store.pop("refresh", str(f.get("refresh_token", "")))
-                if (
-                    not q
-                    or q.get("resource") != cfg.resource
-                    or not self.store.get("grant", q["grant"])
-                ):
-                    return bad
-                grant = q["grant"]
+                supplied = str(f.get("refresh_token", ""))
+                # Consume the old token and renew its grant under one lock. A
+                # concurrent revocation must never resurrect the grant.
+                with self.store.transaction():
+                    q = self.store.get("refresh", supplied)
+                    grant_record = self.store.get("grant", q["grant"]) if q else None
+                    if not q or q.get("resource") != cfg.resource or not grant_record:
+                        return bad
+                    now = time.time()
+                    # Existing grants lack timestamps; migrate only a still-live
+                    # grant when it next refreshes, without resetting the DB.
+                    created_at = grant_record.get("created_at", now)
+                    absolute_expires_at = grant_record.get(
+                        "absolute_expires_at", created_at + cfg.grant_max_ttl
+                    )
+                    remaining = min(cfg.refresh_ttl, absolute_expires_at - now)
+                    if remaining <= 0:
+                        return bad
+                    self.store.delete("refresh", supplied)
+                    grant = q["grant"]
+                    self.store.put(
+                        "grant", grant,
+                        {
+                            "active": True,
+                            "created_at": created_at,
+                            "absolute_expires_at": absolute_expires_at,
+                        },
+                        remaining,
+                    )
             else:
                 return JSONResponse({"error": "unsupported_grant_type"}, status_code=400)
-            return JSONResponse(self.issue(grant), headers={"Cache-Control": "no-store"})
+            return JSONResponse(
+                self.issue(grant, refresh_ttl=remaining),
+                headers={"Cache-Control": "no-store"},
+            )
 
         @app.post("/revoke")
         async def revoke(request: Request):

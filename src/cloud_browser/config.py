@@ -25,11 +25,14 @@ class Settings(BaseSettings):
     http_diagnostics: bool = False
     network_isolated: bool = False
     admin_password_hash: str = ""
+    passkey_bridge_secret: str = Field("", exclude=True, repr=False, max_length=256)
     oauth_client_id: str = "personal-cloud-browser"
     oauth_redirect_uris: list[str] = Field(default_factory=list)
     access_ttl: int = Field(900, ge=60, le=3600)
-    refresh_ttl: int = Field(604800, ge=600, le=2592000)
+    refresh_ttl: int = Field(2592000, ge=600, le=2592000)
+    grant_max_ttl: int = Field(7776000, ge=600, le=15552000)
     session_ttl: int = Field(3600, ge=60)
+    control_session_ttl: int = Field(28800, ge=900, le=86400)
     session_sweep_interval: float = Field(15, ge=1, le=300)
     command_queue_timeout: float = Field(46, ge=1, le=60)
     max_queued_per_work: int = Field(4, ge=1, le=16)
@@ -77,6 +80,8 @@ class Settings(BaseSettings):
 
     @model_validator(mode="after")
     def safe_deployment(self):
+        if self.grant_max_ttl < self.refresh_ttl:
+            raise ValueError("OAuth grant lifetime must cover the refresh token lifetime")
         if self.display_number + self.max_sessions > 1000:
             raise ValueError("Display range must fit all configured work slots")
         for site, tools in self.webmcp_read_allowlist.items():

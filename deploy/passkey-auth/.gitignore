@@ -1,0 +1,9 @@
+*.sqlite*
+config.json
+*.env
+env
+*.log
+.enrollment-transfer
+.venv/
+__pycache__/
+.pytest_cache/

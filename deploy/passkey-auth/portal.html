@@ -1,0 +1,24 @@
+<!doctype html>
+<html lang="ko"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Home MCP · 패스키 로그인</title>
+<style>
+:root{color-scheme:light;font-family:system-ui,-apple-system,"Segoe UI",sans-serif;color:#162c3e;background:#f3f5f7}*{box-sizing:border-box}body{margin:0}main{max-width:640px;margin:8vh auto;padding:28px}.brand{font-size:14px;letter-spacing:.12em;color:#586879;font-weight:650}.card{margin-top:22px;background:white;border:1px solid #e0e5eb;border-radius:20px;padding:30px;box-shadow:0 12px 36px #20334d08}h1{font-size:28px;margin:0 0 14px}h2{font-size:18px;margin-top:24px}p{color:#546476;line-height:1.65;font-size:15px}.small{font-size:13px}button{font:inherit;cursor:pointer;border:0;background:#18476e;color:white;padding:14px 20px;border-radius:11px;width:100%;font-weight:650;margin-top:12px}button:disabled{opacity:.45;cursor:default}.secondary{background:#edf2f7;color:#27405a}.danger{color:#a93436;background:#fff1f1;width:auto;font-size:13px;padding:8px 12px;margin:0}input,textarea{font:inherit;width:100%;border:1px solid #cdd6df;border-radius:10px;padding:12px;margin-top:8px}textarea{height:110px}.device{display:flex;gap:14px;align-items:center;justify-content:space-between;padding:14px 0;border-bottom:1px solid #e8edf2}.label{font-weight:600}.tag{display:inline-block;padding:5px 10px;border-radius:20px;background:#edf4f8;color:#3e6078;font-size:12px}.status{min-height:24px;margin:12px 0 0;white-space:pre-wrap}.error{color:#a22b2b}.foot{font-size:12px;color:#647687;margin-top:18px} [hidden]{display:none!important}a{color:#18476e} @media(max-width:600px){main{margin:3vh auto;padding:18px}.card{padding:24px}}
+</style></head><body><main>
+<div class="brand">HOME MCP</div><section class="card" aria-labelledby="title">
+<span id="tag" class="tag">등록한 패스키로 로그인</span><h1 id="title" style="margin-top:18px">MCP 로그인 관리</h1>
+<p id="intro">기기의 PIN이나 지문으로 본인 확인을 합니다. MCP마다 비밀번호를 기억할 필요가 없습니다.</p>
+<section id="registration-result" hidden aria-live="polite" style="background:#edf8f0;border:1px solid #b8dcc5;border-radius:14px;padding:22px;text-align:center;margin:20px 0">
+<div aria-hidden="true" style="font-size:48px;line-height:1;color:#25814b;margin-bottom:14px">✓</div>
+<strong style="font-size:20px;color:#24653e">서버에 패스키가 등록됐습니다</strong><p id="registered-key" style="margin:10px 0 0;color:#24653e"></p>
+<p class="small" style="margin-bottom:0">아래 버튼으로 패스키 로그인도 확인할 수 있습니다.</p></section>
+<button id="login" hidden>패스키로 로그인</button><button id="register" hidden>패스키 등록하기</button>
+<button id="connect" hidden>ChatGPT 연결 승인</button><p id="status" class="status" role="status" aria-live="polite">설정을 확인하고 있습니다.</p>
+<div id="setup-needed" hidden><p>첫 패스키 등록에는 관리자가 발급한 일회용 등록 링크가 필요합니다.</p></div>
+<section id="manage" hidden><h2>등록된 패스키</h2><div id="devices"></div>
+<p class="small">패스키를 삭제하면 동기화된 모든 기기에서 해당 키로 새로 로그인할 수 없습니다. 이미 승인한 ChatGPT 연결은 해당 앱에서 별도로 해제할 수 있습니다.</p>
+<h2>패스키 추가 등록</h2><label for="label">패스키 이름</label><input id="label" maxlength="60" placeholder="예: Google 패스키, 예비 기기">
+<button id="ticket" class="secondary">15분 동안 유효한 등록 링크 만들기</button>
+<div id="ticket-result" hidden><p class="small">본인 기기에서만 이 링크를 여세요. 한 번 사용하면 만료됩니다.</p><textarea id="ticket-url" readonly aria-label="패스키 등록 링크"></textarea></div>
+<button id="logout" class="secondary">로그아웃</button></section>
+<p class="foot">PIN과 패스키 개인 키는 서버에 전송되지 않습니다.<br>기기 PIN 입력 창은 브라우저 또는 운영체제가 표시합니다.</p>
+</section></main><script src="/auth/portal.js" defer></script></body></html>

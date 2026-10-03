@@ -13,6 +13,7 @@ from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Resp
 from fastapi.staticfiles import StaticFiles
 from starlette.datastructures import UploadFile
 
+from .bridge_proof import verify as verify_passkey_proof
 from .models import BrowserError
 from .uploads import BodyLimit
 
@@ -92,10 +93,13 @@ def control_app(cfg, auth, service):
             or not auth.store.pop("login", nonce)
         ):
             return JSONResponse({"error": "Invalid login form"}, status_code=403)
-        if not await auth.password_ok(str(form.get("password", ""))):
+        if not (
+            verify_passkey_proof(cfg.passkey_bridge_secret, nonce, "control", str(form.get("passkey_assertion", "")))
+            or await auth.password_ok(str(form.get("password", "")))
+        ):
             return JSONResponse({"error": "Login denied"}, status_code=403)
         token = secrets.token_urlsafe(32)
-        auth.store.put("control", token, {"csrf": secrets.token_urlsafe(32)}, 3600)
+        auth.store.put("control", token, {"csrf": secrets.token_urlsafe(32)}, cfg.control_session_ttl)
         result = RedirectResponse("/", status_code=303)
         result.set_cookie(
             "cb_control",
@@ -103,7 +107,7 @@ def control_app(cfg, auth, service):
             secure=not cfg.development,
             httponly=True,
             samesite="strict",
-            max_age=3600,
+            max_age=cfg.control_session_ttl,
         )
         result.delete_cookie("cb_login", path="/login")
         return result

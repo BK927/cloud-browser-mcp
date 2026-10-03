@@ -120,6 +120,10 @@ upgraded.
 5. Register `https://YOUR-HOST/mcp` in ChatGPT developer mode with the exact
    OAuth callback shown by ChatGPT, then verify the first MCP image response.
 
+For an optional shared Google-synced or device-bound passkey login, see
+[passkey login](docs/PASSKEY_LOGIN.md). It protects the MCP authorization and
+private console login without changing website-action approvals.
+
 See [Docker deployment](docs/DEPLOYMENT.md),
 [ChatGPT setup](docs/CHATGPT_SETUP.md), and
 [validation](docs/VALIDATION.md) for the complete checklist. For Docker-free
