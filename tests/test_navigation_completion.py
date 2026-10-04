@@ -90,3 +90,26 @@ def test_unreachable_document_is_failure_not_success():
     with pytest.raises(BrowserError) as exc:
         task.poll(before=before)
     assert exc.value.code == "NAVIGATION_FAILED"
+
+
+def test_interactive_readiness_is_opt_in_and_still_settles():
+    tab = NavigationProbe(loader="new", ready="interactive")
+    task, clock, before = probe(tab)
+    task.reply["loaderId"] = "new"
+    assert not task.poll(before=before)
+    assert not task.poll(before=before, readiness="interactive", settle_ms=500)
+    clock[0] = 0.5
+    assert task.poll(before=before, readiness="interactive", settle_ms=500)
+
+
+def test_interactive_readiness_rechecks_loader():
+    class Replaced(NavigationProbe):
+        def run_cdp(self, command, **kwargs):
+            result = super().run_cdp(command, **kwargs)
+            if command == "Runtime.evaluate" and kwargs["expression"] == "document.readyState":
+                self.loader = "replacement"
+            return result
+
+    task, _, before = probe(Replaced(loader="new", ready="interactive"))
+    task.reply["loaderId"] = "new"
+    assert not task.poll(before=before, readiness="interactive")

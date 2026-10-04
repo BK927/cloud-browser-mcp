@@ -52,6 +52,10 @@ class Settings(BaseSettings):
     node_registry_bytes: int = Field(2 * 1024 * 1024, ge=64 * 1024, le=16 * 1024 * 1024)
     navigation_timeout: float = Field(60, ge=1, le=300)
     navigation_max_timeout: float = Field(300, ge=1, le=300)
+    reader_enabled: bool = True
+    reader_idle_ttl: int = Field(300, ge=60, le=3600)
+    reader_timeout: float = Field(25, ge=5, le=40)
+    reader_max_text_chars: int = Field(60000, ge=4000, le=250000)
     auth_rules: dict[str, AuthRule] = Field(default_factory=dict)
     webmcp_enabled: bool = True
     webmcp_testing: bool = False
@@ -123,6 +127,8 @@ class Settings(BaseSettings):
             )
         if self.navigation_timeout > self.navigation_max_timeout:
             raise ValueError("Default navigation timeout exceeds the operator ceiling")
+        if self.reader_timeout > self.navigation_max_timeout:
+            raise ValueError("Reader timeout exceeds the operator navigation ceiling")
         if self.grant_max_ttl < self.refresh_ttl:
             raise ValueError("OAuth grant lifetime must cover the refresh token lifetime")
         if self.display_number + self.max_sessions > 1000:

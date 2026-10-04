@@ -13,7 +13,7 @@ places browser traffic behind a validating egress proxy.
 
 > [!IMPORTANT]
 > This is an early-development, personal deployment: package version `0.1.0`
-> with external contract `0.4` draft. The current contract exposes 17 tools and
+> with external contract `0.4` draft. The current contract exposes 18 tools and
 > requires the server-issued `lease_id` on session calls. Refresh your client's
 > tool schema after upgrading. Public SaaS, multi-user hosting, and app-directory
 > submission are outside the project scope.
@@ -181,6 +181,7 @@ project's validated reference topology remains Tailscale Funnel + Serve.
 | Tool | Purpose |
 | --- | --- |
 | `browser_open` | Open a session/tab, reuse a tab, and optionally navigate. |
+| `browser_read` | Read a public page's main text and links in one call; continue with `read_id` and `next_offset`. No work lease required. |
 | `browser_list_tabs` | List tabs in the owned session. |
 | `browser_navigate` | Navigate by URL or history and refresh GET documents. |
 | `browser_observe` | Return DOM-first observations, JSON nodes, images, and balanced pagination. |

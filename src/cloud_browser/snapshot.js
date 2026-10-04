@@ -477,12 +477,12 @@
   const root = roots[0] || null;
   const excluded = /^(SCRIPT|STYLE|TEMPLATE|NOSCRIPT|IFRAME|FRAME|OBJECT|EMBED|SVG|CANVAS|VIDEO|INPUT|TEXTAREA|SELECT)$/;
   const block = /^(P|DIV|SECTION|ARTICLE|MAIN|HEADER|FOOTER|ASIDE|NAV|UL|OL|LI|TABLE|TR|BLOCKQUOTE|PRE|DL|DT|DD|FIGURE|FIGCAPTION|FORM)$/;
-  const collectText = (start, semantic) => {
+  const collectText = (start, semantic, budget=textBudget) => {
     const rootSet = new Set(start);
     let count=0, chars=0, truncated=false;
     const pieces=[], pending=[], visited=new Set();
     const add = text => {
-      const part=text.slice(0,Math.max(0,textBudget-chars));
+      const part=text.slice(0,Math.max(0,budget-chars));
       if (part) {pieces.push(part);chars+=part.length;}
       if (part.length < text.length) truncated=true;
     };
@@ -494,7 +494,7 @@
       visited.add(e);
       if(++count>scanBudget){truncated=true;break;}
       if(e.nodeType===Node.TEXT_NODE){
-        const remaining=Math.max(0,textBudget-chars), part=e.substringData(0,remaining);
+        const remaining=Math.max(0,budget-chars), part=e.substringData(0,remaining);
         const text=normalize(part);if(text)add(text+' ');
         if(part.length<e.length)truncated=true;
         continue;
@@ -513,8 +513,27 @@
     return {text:pieces.join('').replace(/[ \t]+\n/g,'\n').replace(/\n{3,}/g,'\n\n').trim(),truncated};
   };
   const semantic = !protectedPage && !exactTarget && !['interactive','visual'].includes(options.mode) ?
-    collectText(roots,true) : {text:'',truncated:false};
+    collectText(roots,true,Math.min(textBudget,options.max_text_chars || textBudget)) : {text:'',truncated:false};
   const publicText = !protectedPage && !exactTarget ? collectText([document.body],false) : {text:'',truncated:false};
+  const readerLinks=[], linkUrls=new Set();
+  let readerLinksTruncated=false;
+  if(options.collect_links && !protectedPage && !exactTarget) {
+    const rootSet=new Set(roots);
+    for(const a of inspected) {
+      if(!a.matches('a[href]') || protectedElement(a) || !rendered(a) || !/^https?:\/\//i.test(a.href))continue;
+      // Use the semantic roots and exclude their navigation/header/footer descendants.
+      let inside=false;
+      for(let p=a;p;p=parentOf(p)) {
+        if(rootSet.has(p)){inside=true;break;}
+        if(p.matches('nav,header,footer,aside,[role=navigation],[role=contentinfo],[role=banner]'))break;
+      }
+      if(!inside || linkUrls.has(a.href))continue;
+      if(readerLinks.length>=200){readerLinksTruncated=true;break;}
+      linkUrls.add(a.href);
+      const text=normalize(collectText([a],true,200).text || a.getAttribute('aria-label') || a.title).slice(0,200);
+      readerLinks.push({text,url:a.href});
+    }
+  }
   let queryEmptyReason=null;
   const queryEmpty=['interactive','visual'].includes(options.mode)?!queried.length:!semantic.text;
   if ((query.selector || query.scope) && queryEmpty) {
@@ -553,6 +572,7 @@
     text: bodyText, text_scan_truncated: publicText.truncated,
     semantic_text: semantic.text, semantic_source: root ? root.tagName.toLowerCase() : null,
     semantic_source_truncated: semantic.truncated,
+    ...(options.collect_links ? {reader_links:readerLinks,reader_links_truncated:readerLinksTruncated} : {}),
     has_sensitive_regions: protectedRoots.size > 0, protected_regions: protectedRegions,
     active_sensitive_controls:inspected.some(e=>e.matches('input,textarea,select,[contenteditable]') &&
       protectionRoot(e) && visible(e)),

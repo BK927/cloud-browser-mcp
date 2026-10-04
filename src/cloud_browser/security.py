@@ -58,6 +58,75 @@ def redact_tree(value):
     return value
 
 
+def reader_safe_url(url: str) -> str:
+    """Preserve public navigation parameters while withholding authentication values."""
+    secret_keys = {
+        "token",
+        "access_token",
+        "refresh_token",
+        "id_token",
+        "auth",
+        "authorization",
+        "code",
+        "state",
+        "nonce",
+        "session",
+        "sess",
+        "sessionid",
+        "sid",
+        "password",
+        "passwd",
+        "pwd",
+        "secret",
+        "signature",
+        "sig",
+        "key",
+        "apikey",
+        "api_key",
+        "credential",
+        "credentials",
+        "ticket",
+        "otp",
+        "jwt",
+        "saml",
+        "samlresponse",
+        "assertion",
+        "x_amz_signature",
+        "x_amz_credential",
+        "x_amz_security_token",
+    }
+    try:
+        p = urlsplit(url)
+        host = p.hostname or ""
+        if ":" in host:
+            host = f"[{host}]"
+        if p.port:
+            host += f":{p.port}"
+
+        def public_value(key, value):
+            separated = re.sub(r"([a-z0-9])([A-Z])", r"\1_\2", key)
+            parts = re.split(r"[^a-z0-9]+", separated.casefold())
+            secret_key = "_".join(parts) in secret_keys or any(p in secret_keys for p in parts)
+            if (
+                (secret_key and not re.fullmatch(r"[0-9]{1,6}", value))
+                or TOKEN.search(value)
+                or SECRET_ASSIGNMENT.search(value)
+                or re.search(r"[A-Za-z0-9_-]{40,}", value)
+                or len(value) > 1000
+            ):
+                return "[REDACTED]"
+            return value
+
+        query = urlencode(
+            [(redact(k), public_value(k, v)) for k, v in parse_qsl(p.query, keep_blank_values=True)]
+        )
+        # Keep exactly the existing fragment policy, including hash-route queries.
+        fragment = urlsplit(safe_url(url)).fragment
+        return urlunsplit((p.scheme, host, redact(p.path), query, fragment))
+    except ValueError:
+        return "[invalid URL]"
+
+
 def safe_url(url: str) -> str:
     try:
         p = urlsplit(url)

@@ -6,7 +6,7 @@
 관찰 문자열의 배치나 고정된 JSON 키 순서를 가정해서는 안 됩니다.
 
 원래 8개 도구 이름을 유지하고 status/configure, 선택 WebMCP 2개 및
-wait/dialog/logs/artifacts/clipboard를 더해 17개 도구를 제공합니다.
+wait/dialog/logs/artifacts/clipboard 및 공개 읽기 browser_read를 더해 18개 도구를 제공합니다.
 MCP SDK의 `tools/list` 입력 schema가 정확한 타입·범위의 기준입니다.
 
 모든 정상 도구 실행 결과는 `status`, `request_id`, `session_id`, `tab_id`, `revision`,
@@ -14,7 +14,7 @@ MCP SDK의 `tools/list` 입력 schema가 정확한 타입·범위의 기준입�
 `structuredContent`와 text content에 담고 이미지 바이트는 별도 MCP image content로
 반환합니다. JSON의 이미지 설명에만 base64를 넣는 방식이 아닙니다.
 
-17개 도구 모두 `tools/list`에 `outputSchema`를 선언합니다. 공통 응답과 함께 임대 ID,
+18개 도구 모두 `tools/list`에 `outputSchema`를 선언합니다. 공통 응답과 함께 임대 ID,
 관찰 커서·스크린샷 ID, 승인·작업 상태, 파일 핸들 등 도구별 결과 구조를 설명합니다.
 오류·사용자 제어 요청에서는 도구별 성공 필드가 생략될 수 있으며 기존 null과 이미지
 content는 유지합니다. 페이지 제공 도구의 임의 JSON과 확장 메타데이터도 보존합니다.
@@ -46,11 +46,31 @@ visible/hidden은 렌더링 여부(뷰포트 밖도 포함), enabled는 렌더�
 불완전한 조회로 부재나 숨김을 성공이라고 판정하지 않습니다.
 시간 제한은 조건 반복 대기의 한도이며 마지막 브라우저 관찰 호출 시간은 추가될 수 있습니다.
 
+## browser_read
+
+공개 페이지 읽기에는 `browser_read`를 우선 사용합니다. 절대 http(s) `url` 또는 이전
+결과의 `read_id` 중 정확히 하나를 지정합니다. `offset`은 기본 0, `max_chars`는 기본
+20000(1000..100000), `selector`는 본문 범위를 정하는 선택적 CSS 선택자입니다.
+응답의 `page`는 URL·제목, `read`는 본문·링크·완료 여부와 생략·제한 플래그를 담습니다.
+`session_id`, `tab_id`, `revision`은 null이며 임대·승인·스크린샷이 필요하지 않습니다.
+긴 본문은 `read_id`와 `next_offset`으로 이어 읽습니다. 캐시는 호출자별 최대 4개,
+10분 유효하며 브라우저나 페이지 변경에 영향을 받지 않습니다. 링크는 첫 조각에만
+최대 200개 반환하며 인증 URL 값은 가립니다. 만료·다른 호출자 ID는 `READ_NOT_FOUND`입니다.
+
+서버가 공개 읽기 전용 브라우저 하나를 필요할 때 시작합니다. 로그인하지 않는
+`profiles/reader` 프로필을 유지하고 기본 300초 유휴 후 브라우저만 닫습니다.
+실행 중에는 세션 한도를 차지하며 세션 도구·로그인·수동 제어·업로드로 접근할 수 없습니다.
+기본 탐색 예산은 25초, 본문 캐시는 60000자이며 `CB_READER_*` 설정으로 조절합니다.
+`interactive` 준비 상태와 안정화 후 읽고 탐색 시간 초과 시 `complete=false`로 부분 본문을
+반환합니다. 기존 페이지 보호와 전역 사용자 제어 일시정지는 그대로 적용됩니다.
+`CB_READER_ENABLED=false`이면 도구를 등록하지 않습니다.
+
 ## 입력
 
 | 도구 | 입력 |
 |---|---|
 | open | session_id?, url?, new_tab=true, lease_id?, timeout_ms? |
+| read | url? 또는 read_id? (정확히 하나), offset=0, max_chars=20000, selector? |
 | list_tabs | session_id |
 | navigate | session_id, tab_id, operation=goto/back/forward/reload, url?, timeout_ms?, operation_id? |
 | observe | session_id, tab_id, mode=auto/semantic/interactive/visual, full_page=false, max_chars?, cursor?, query? |

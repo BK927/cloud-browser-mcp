@@ -6,6 +6,7 @@ from urllib.parse import parse_qs, urlsplit
 import httpx
 import httpx2
 import pytest
+from conftest import fake_worker_resources
 from mcp import ClientSession
 from mcp.client.streamable_http import streamable_http_client
 from prefix_proxy import serve_prefix
@@ -165,6 +166,7 @@ async def test_real_http_root_and_stripped_prefix_registry_and_oauth_match(cfg, 
             deep=True, update={"data_dir": tmp_path / name, "control_origin": control_origin}
         )
         async with serve_prefix(config, prefix) as stack:
+            stack.service.resources = fake_worker_resources
             async with httpx.AsyncClient(trust_env=False, follow_redirects=False) as client:
                 denied = await client.get(config.resource)
                 assert denied.status_code == 401
@@ -215,7 +217,7 @@ async def test_real_http_root_and_stripped_prefix_registry_and_oauth_match(cfg, 
                                     key=lambda tool: tool["name"],
                                 )
                             )
-                            assert len(tools) == 17
+                            assert len(tools) == 18
                             opened = (
                                 await session.call_tool("browser_open", {})
                             ).structured_content

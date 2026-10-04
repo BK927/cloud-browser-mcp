@@ -56,7 +56,9 @@ class NavigationJob:
             current_page=self.page,
         )
 
-    def poll(self, *, before, expected_entry=None, operation="goto", settle_ms=0):
+    def poll(
+        self, *, before, expected_entry=None, operation="goto", settle_ms=0, readiness="complete"
+    ):
         if self.cancelled:
             self.fail("NAVIGATION_CANCELLED")
         if self.failure:
@@ -110,7 +112,8 @@ class NavigationJob:
                 returnByValue=True,
                 _timeout=timeout,
             )
-            if ready.get("result", {}).get("value") != "complete":
+            accepted = ("interactive", "complete") if readiness == "interactive" else ("complete",)
+            if ready.get("result", {}).get("value") not in accepted:
                 self.settled_at = None
                 return False
             self.phase = "final_verification"

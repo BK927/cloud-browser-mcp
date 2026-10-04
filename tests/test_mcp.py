@@ -7,7 +7,7 @@ import socket
 import httpx2
 import pytest
 import uvicorn
-from conftest import FakeWorker
+from conftest import FakeWorker, fake_worker_resources
 from mcp import ClientSession
 from mcp.client.streamable_http import streamable_http_client
 from PIL import Image
@@ -34,7 +34,9 @@ async def test_actual_streamable_http_sdk_tools_and_image(tmp_path, real_browser
         headless=True,
         browser_proxy="",
     )
-    public, _, _, auth = create_apps(cfg, worker=None if real_browser else FakeWorker())
+    public, _, service, auth = create_apps(cfg, worker=None if real_browser else FakeWorker())
+    if not real_browser:
+        service.resources = fake_worker_resources
     auth.store.put("grant", "test-grant", {"active": True})
     token = auth.issue("test-grant")["access_token"]
     server = uvicorn.Server(
@@ -54,7 +56,7 @@ async def test_actual_streamable_http_sdk_tools_and_image(tmp_path, real_browser
                 async with ClientSession(*streams) as client:
                     await client.initialize()
                     tools = (await client.list_tools()).tools
-                    assert len(tools) == 17
+                    assert len(tools) == 18
                     assert {t.name for t in tools} >= {
                         "browser_status",
                         "browser_configure",

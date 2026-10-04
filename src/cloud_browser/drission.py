@@ -35,7 +35,16 @@ from .observation import compact_node, paginate
 from .page_tools import PageTools, schema_fingerprint, scrub_result, validate_arguments
 from .resources import admission_state, memory_state
 from .runtime import DisplayRuntime
-from .security import SENSITIVE, TOKEN, origin, redact, redact_tree, safe_url, validate_url
+from .security import (
+    SENSITIVE,
+    TOKEN,
+    origin,
+    reader_safe_url,
+    redact,
+    redact_tree,
+    safe_url,
+    validate_url,
+)
 from .uploads import verify_file
 
 SNAPSHOT = Path(__file__).with_name("snapshot.js").read_text(encoding="utf-8")
@@ -274,7 +283,7 @@ class DrissionAdapter:
             state.tab._driver.set_callback(event, None)
         state.tab.run_cdp("Page.setInterceptFileChooserDialog", enabled=False)
 
-    def _capture_state(self, state, *, mode="auto", lightweight=False):
+    def _capture_state(self, state, *, mode="auto", lightweight=False, reader_options=None):
         tab = DeadlineTab(state.tab, self.capture_deadline)
         if state.events.dialog:
             raise BrowserError("DIALOG_OPEN", "A JavaScript dialog is open; inspect browser_dialog")
@@ -326,7 +335,14 @@ class DrissionAdapter:
         result = tab.run_cdp(
             "Runtime.evaluate",
             expression="globalThis.__cbOptions="
-            + json.dumps({"mode": mode, "lightweight": lightweight, "query": state.query})
+            + json.dumps(
+                {
+                    "mode": mode,
+                    "lightweight": lightweight,
+                    "query": state.query,
+                    **(reader_options or {}),
+                }
+            )
             + ";"
             + SNAPSHOT,
             contextId=world,
@@ -502,9 +518,14 @@ class DrissionAdapter:
         state.data = data
         return data
 
-    def _capture_page(self, state, *, mode="auto", lightweight=False):
+    def _capture_page(self, state, *, mode="auto", lightweight=False, reader_options=None):
         """Inspect bounded frame documents; collect no pixels or values from protected frames."""
-        data = self._capture_state(state, mode=mode, lightweight=lightweight)
+        data = self._capture_state(
+            state,
+            mode=mode,
+            lightweight=lightweight,
+            **({"reader_options": reader_options} if reader_options else {}),
+        )
         state.frame_nodes = {}
         inventory, texts, masks, visited, readable = [], [], [], set(), set()
         root_regions = data["iframe_regions"]
@@ -650,7 +671,12 @@ class DrissionAdapter:
                         continue
                     if state.query.get("_all_frames"):
                         child.query = dict(state.query)
-                    self._capture_state(child, mode=mode, lightweight=lightweight)
+                    self._capture_state(
+                        child,
+                        mode=mode,
+                        lightweight=lightweight,
+                        **({"reader_options": reader_options} if reader_options else {}),
+                    )
                     entry["origin"] = (
                         origin(child.data["url"])
                         if child.data["url"].startswith(("http://", "https://"))
@@ -842,6 +868,27 @@ class DrissionAdapter:
                     data["file_chooser"] = {"error": "FILE_CHOOSER_UNAVAILABLE"}
         if texts and mode in ("auto", "semantic"):
             data["semantic_text"] = (data["semantic_text"] + "\n" + "\n".join(texts))[:250000]
+        if reader_options:
+            children = [child.data for fid, child in state.frame_states.items() if fid in readable]
+            budget = reader_options.get("max_text_chars", self.cfg.reader_max_text_chars)
+            data["semantic_source_truncated"] = (
+                data["semantic_source_truncated"]
+                or len(data["semantic_text"]) > budget
+                or any(child["semantic_source_truncated"] for child in children)
+            )
+            data["semantic_text"] = data["semantic_text"][:budget]
+            links, urls = [], set()
+            truncated = any(part.get("reader_links_truncated") for part in [data, *children])
+            for part in [data, *children]:
+                for link in part.get("reader_links", []):
+                    if link["url"] in urls:
+                        continue
+                    urls.add(link["url"])
+                    if len(links) == 200:
+                        truncated = True
+                        break
+                    links.append(link)
+            data.update(reader_links=links, reader_links_truncated=truncated)
         return data
 
     def _registry_for(self, state):
@@ -1115,7 +1162,9 @@ class DrissionAdapter:
     def _validate_url(self, url):
         validate_url(url, dns_proxy=self.cfg.browser_proxy if self.cfg.network_isolated else None)
 
-    def open(self, session_id, url=None, new_tab=True):
+    def open(self, session_id, url=None, new_tab=True, profile=None):
+        if profile not in (None, "reader"):
+            raise BrowserError("INVALID_INPUT", "Unsupported internal browser profile")
         if url:
             self._validate_url(url)
         sid = session_id
@@ -1134,20 +1183,20 @@ class DrissionAdapter:
             runtime = DisplayRuntime(self.cfg.model_copy(update={"display_number": number}))
             runtime.start()
             self.runtimes[sid] = runtime
-            profile = self.cfg.data_dir / "profiles" / sid
-            profile.mkdir(parents=True, exist_ok=True)
+            profile_dir = self.cfg.data_dir / "profiles" / (profile or sid)
+            profile_dir.mkdir(parents=True, exist_ok=True)
             if os.name == "posix" and not self.cfg.development:
                 import grp
 
-                os.chown(profile, -1, grp.getgrnam(self.cfg.browser_group).gr_gid)
-                profile.chmod(0o2770)
+                os.chown(profile_dir, -1, grp.getgrnam(self.cfg.browser_group).gr_gid)
+                profile_dir.chmod(0o2770)
             with socket.socket() as sock:
                 sock.bind(("127.0.0.1", 0))
                 port = sock.getsockname()[1]
             options = self.Options(read_file=False)
             options.set_browser_path(self.cfg.chromium_path).set_local_port(
                 port
-            ).set_user_data_path(str(profile))
+            ).set_user_data_path(str(profile_dir))
             options.set_timeouts(base=5, page_load=20, script=5).set_retry(times=0)
             options.headless(self.cfg.headless)
             if self.cfg.browser_language is not None:
@@ -1158,6 +1207,8 @@ class DrissionAdapter:
             options.set_argument("--disable-quic")
             options.set_argument("--no-first-run")
             options.set_argument("--no-default-browser-check")
+            if profile == "reader":
+                options.set_argument("--disk-cache-size=67108864")
             # Do not start Chrome's network-heavy new-tab application only to
             # replace it with about:blank immediately after CDP connects.
             options.set_argument("about:blank")
@@ -1382,7 +1433,7 @@ class DrissionAdapter:
             },
         )
 
-    def navigation_poll(self, session_id, tab_id):
+    def navigation_poll(self, session_id, tab_id, readiness="complete"):
         session = self._session(session_id)
         if session.get("paused"):
             raise BrowserError(
@@ -1400,6 +1451,7 @@ class DrissionAdapter:
                 expected_entry=job.expected_entry,
                 operation=job.operation,
                 settle_ms=state.options["wait_ms"],
+                readiness=readiness,
             )
         except BrowserError:
             state.navigation_job = None
@@ -1468,6 +1520,7 @@ class DrissionAdapter:
         lightweight=False,
         query=None,
         _wait_state=None,
+        reader_options=None,
     ):
         state = self._tab(session_id, tab_id)
         if not cursor:
@@ -1496,7 +1549,12 @@ class DrissionAdapter:
             state.query = {}
             for child in state.frame_states.values():
                 child.query = {}
-        data = self._capture_page(state, mode=mode, lightweight=lightweight)
+        data = self._capture_page(
+            state,
+            mode=mode,
+            lightweight=lightweight,
+            **({"reader_options": reader_options} if reader_options else {}),
+        )
         self._guard_page(data)
         if query and query.get("frame_id") and query["frame_id"] not in state.frame_states:
             reason = next(
@@ -1569,6 +1627,10 @@ class DrissionAdapter:
                 else "",
                 "nodes": interactive,
             }
+            if reader_options:
+                # Cache the whole bounded text in one RPC, without the ordinary
+                # cursor paginator's preference for ending at a newline.
+                snapshot["semantic"] = snapshot["semantic"][:budget]
             offsets = (0, 0)
         obs, next_offsets = paginate(snapshot, offsets, budget)
         obs.update(
@@ -1589,6 +1651,15 @@ class DrissionAdapter:
             protected_regions_omitted=bool(data.get("has_sensitive_regions")),
             observation_revision=state.revision,
         )
+        if reader_options:
+            obs.update(
+                semantic_truncated=len(redact(observation_data["semantic_text"])) > budget,
+                links=[
+                    {"text": redact(link["text"]), "url": reader_safe_url(link["url"])}
+                    for link in observation_data.get("reader_links", [])
+                ],
+                links_truncated=observation_data.get("reader_links_truncated", False),
+            )
         if obs["truncated"]:
             next_cursor = "cursor_" + secrets.token_urlsafe(16)
             state.cursors[next_cursor] = {
@@ -1654,6 +1725,20 @@ class DrissionAdapter:
         if data["frame_reading_truncated"]:
             notices.append(
                 "Partial frame observation: inspect frames[].reason; unavailable or sensitive regions are withheld"
+            )
+        if reader_options:
+            # DrissionPage's tab.url/title properties wait for full load. Use
+            # the privacy-checked isolated-world snapshot for interactive reads.
+            return dict(
+                session_id=session_id,
+                tab_id=tab_id,
+                revision=state.revision,
+                page={
+                    "url": reader_safe_url(data["url"]),
+                    "title": redact(data["title"] or "") or None,
+                },
+                observation=obs,
+                notices=notices,
             )
         return self._result(session_id, tab_id, observation=obs, notices=notices, **extra)
 

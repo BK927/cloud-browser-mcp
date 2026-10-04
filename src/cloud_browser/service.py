@@ -6,14 +6,16 @@ import time
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 
+from pydantic import ValidationError
+
 from .approval import PASSIVE_ACTIONS
 from .authentication import MANUAL_METHODS
 from .config import Settings
-from .models import BrowserError, response
+from .models import BrowserError, ObservationQuery, response
 from .operation_diagnostics import log_capacity
 from .ownership import check_ownership, durable_owner, new_ownership
 from .resources import admission_state, memory_state
-from .security import SENSITIVE, TOKEN, origin, redact, validate_url
+from .security import SENSITIVE, TOKEN, origin, reader_safe_url, redact, validate_url
 from .store import Store
 from .uploads import Uploads
 from .worker import Worker
@@ -45,6 +47,10 @@ class BrowserService:
         self.sweeper = None
         self.cleanup_required = False
         self.navigations = {}
+        self.reader_sid = None
+        self.reader_tid = None
+        self.reader_lock = asyncio.Lock()
+        self.read_cache = {}
 
     def start(self):
         if self.sweeper is None:
@@ -67,7 +73,8 @@ class BrowserService:
     def _touch(self, sid):
         if sid in self.sessions:
             now = time.time()
-            self.sessions[sid].update(expires=now + self.cfg.session_ttl, last_activity=now)
+            ttl = self.cfg.reader_idle_ttl if sid == self.reader_sid else self.cfg.session_ttl
+            self.sessions[sid].update(expires=now + ttl, last_activity=now)
 
     def _forget(self, sid, state, reason):
         nav = self.navigations.get(sid)
@@ -81,7 +88,10 @@ class BrowserService:
                     nav["tab_id"],
                 ),
             )
-        self._remember_session(sid, state, reason)
+        if sid == self.reader_sid:
+            self.reader_sid = self.reader_tid = None
+        else:
+            self._remember_session(sid, state, reason)
         self.sessions.pop(sid, None)
         self.leases.pop(sid, None)
         self.owners.pop(sid, None)
@@ -94,11 +104,13 @@ class BrowserService:
                 self.upload_owners.pop(upload, None)
 
     async def _reap_expired(self):
+        self._expire_reads()
         if self._active_control():
             return  # Never disturb the shared private desktop, even after expiry.
         for sid, state in list(self.sessions.items()):
             if (
                 state["expires"] > time.time()
+                or (sid == self.reader_sid and self.reader_lock.locked())
                 or self.queued.get(sid)
                 or sid in self.navigations
                 or (self.running and self.running[0] == sid)
@@ -151,13 +163,16 @@ class BrowserService:
 
     async def stage_upload(self, source, session_id=None):
         async with self.lock:
-            if session_id is None and len(self.sessions) == 1:
-                session_id = next(iter(self.sessions))
-            if session_id is None and self.sessions:
+            works = [sid for sid in self.sessions if sid != self.reader_sid]
+            if session_id is None and len(works) == 1:
+                session_id = works[0]
+            if session_id is None and works:
                 raise BrowserError(
                     "SESSION_REQUIRED", "Choose the work that should receive this file"
                 )
             if session_id:
+                if session_id == self.reader_sid:
+                    raise BrowserError("LEASE_INVALID", "The reader is reserved for public reading")
                 self._session(session_id)
             self._check_control(session_id)
             self._admit()
@@ -211,6 +226,8 @@ class BrowserService:
         return state
 
     def _remember_session(self, sid, state, reason):
+        if sid == self.reader_sid:
+            return  # Internal reader work never acquires a durable owner/lease record.
         if state != "active":
             self.clipboards.pop(sid, None)
         self.store.put(
@@ -351,6 +368,27 @@ class BrowserService:
         key = None
         created_operation = False
         try:
+            if sid is not None and sid == self.reader_sid:
+                raise BrowserError("LEASE_INVALID", "The reader is reserved for public reading")
+            if method == "read":
+                if args.get("read_id") is not None:
+                    return await self._read(
+                        principal, **args
+                    )  # Cached slices do not queue for Chromium.
+                if (
+                    len(self.tasks) > 32
+                    or self.queued.get("reader", 0) >= self.cfg.max_queued_per_work
+                ):
+                    raise BrowserError(
+                        "BROWSER_BUSY", "Reader queue is full", busy_reason="queue_capacity"
+                    )
+                self.queued["reader"] = self.queued.get("reader", 0) + 1
+                try:
+                    return await self._read(principal, **args)
+                finally:
+                    self.queued["reader"] -= 1
+                    if not self.queued["reader"]:
+                        del self.queued["reader"]
             if principal is not None:
                 if method == "open" and not sid:
                     pass  # Capacity is checked atomically at dispatch, not for the whole conversation.
@@ -364,6 +402,7 @@ class BrowserService:
                         approvals=[],
                         staged_uploads=[],
                         capabilities=self._capabilities(),
+                        reader=self._reader_status(),
                     )
                 else:
                     if not sid and lease_id:
@@ -493,6 +532,201 @@ class BrowserService:
             context["result"] = result
             return result
 
+    def _reader_status(self):
+        state = self.sessions.get(self.reader_sid)
+        return {"active": bool(state), "idle_expires_at": iso(state["expires"]) if state else None}
+
+    def _expire_reads(self):
+        now = time.time()
+        self.read_cache = {
+            rid: item for rid, item in self.read_cache.items() if item["expires"] > now
+        }
+
+    def _read_slice(self, rid, item, offset, max_chars):
+        cached = item["read"]
+        end = min(len(cached["text"]), offset + max_chars)
+        return response(
+            page=item["page"],
+            notices=item["notices"],
+            read=cached
+            | {
+                "read_id": rid,
+                "text": cached["text"][offset:end],
+                "offset": offset,
+                "next_offset": end if end < len(cached["text"]) else None,
+                "links": cached["links"] if offset == 0 else [],
+            },
+        )
+
+    async def _read(
+        self, principal, url=None, read_id=None, offset=0, max_chars=None, selector=None
+    ):
+        if not self.cfg.reader_enabled:
+            raise BrowserError("INVALID_INPUT", "Public reading is disabled")
+        if (url is None) == (read_id is None):
+            raise BrowserError("INVALID_INPUT", "Exactly one of url and read_id is required")
+        max_chars = 20000 if max_chars is None else max_chars
+        if type(offset) is not int or offset < 0:
+            raise BrowserError("INVALID_INPUT", "offset must be a nonnegative integer")
+        if type(max_chars) is not int or not 1000 <= max_chars <= 100000:
+            raise BrowserError("INVALID_INPUT", "max_chars must be 1000..100000")
+        try:
+            query = (
+                ObservationQuery(selector=selector).model_dump(exclude_none=True)
+                if selector is not None
+                else None
+            )
+        except ValidationError as exc:
+            raise BrowserError("INVALID_INPUT", "Invalid observation selector") from exc
+        self._expire_reads()
+        self._check_control(None)
+        if read_id is not None:
+            item = self.read_cache.get(read_id)
+            if not item or item["principal"] != principal:
+                raise BrowserError(
+                    "READ_NOT_FOUND", "Read is unknown, expired or belongs to another caller"
+                )
+            return self._read_slice(read_id, item, offset, max_chars)
+
+        # Serialize reader pages, but let other works run between navigation probes.
+        async with self._command_lock_for_reader():
+            try:
+                async with self._command_lock():
+                    self._check_control(None)
+                    await asyncio.to_thread(
+                        validate_url,
+                        url,
+                        dns_proxy=self.cfg.browser_proxy if self.cfg.network_isolated else None,
+                    )
+                    await self._reap_expired()
+                    if self.reader_sid not in self.sessions:
+                        if len(self.sessions) >= self.cfg.max_sessions:
+                            raise BrowserError(
+                                "BROWSER_BUSY",
+                                "Work capacity is occupied; retry when a work closes",
+                                busy_reason="session_capacity",
+                                retry_after_seconds=15,
+                                scheduler=self._scheduler(),
+                            )
+                        self._admit(self.cfg.memory_per_session_mb, "new_session")
+                        self.reader_sid = "ses_" + secrets.token_urlsafe(18)
+                        self.reader_tid = None
+                        self.sessions[self.reader_sid] = {
+                            "expires": time.time() + self.cfg.reader_idle_ttl,
+                            "last_activity": time.time(),
+                            "uncertain": False,
+                            "approval_epoch": 0,
+                        }
+                    sid = self.reader_sid
+                    if self.reader_tid is None:
+                        opened = await self._rpc(
+                            "open", session_id=sid, new_tab=False, profile="reader"
+                        )
+                        self.reader_tid = opened["tab_id"]
+                    tid = self.reader_tid
+                    # A private-control interruption may have left the worker job paused.
+                    await self._cancel_navigation(sid)
+                    await self._rpc("navigation_cancel", session_id=sid, tab_id=tid)
+                    self._admit(64, "navigation")
+                    result = await self._begin_navigation(
+                        sid,
+                        tid,
+                        "goto",
+                        url,
+                        int(self.cfg.reader_timeout * 1000),
+                    )
+                    nav = self.navigations.get(sid)
+                    if nav:
+                        nav["reader"] = True
+                if nav:
+                    await self._drive_navigation(sid, nav)
+                    result = nav["result"]
+                error = result.get("error")
+                complete = not error
+                if error and error["code"] != "NAVIGATION_TIMEOUT":
+                    raise BrowserError(error["code"], error["message"], result["status"])
+                async with self._command_lock():
+                    observed = await self._observe(
+                        sid,
+                        tid,
+                        mode="semantic",
+                        max_chars=self.cfg.reader_max_text_chars,
+                        query=query,
+                        reader_options={
+                            "collect_links": True,
+                            "max_text_chars": self.cfg.reader_max_text_chars,
+                        },
+                    )
+                    self._touch(sid)
+                obs = observed["observation"]
+                text = obs.get("semantic_snapshot", "")[: self.cfg.reader_max_text_chars]
+                notices = list(observed.get("notices", []))
+                if not complete:
+                    notices.append(
+                        "NAVIGATION_TIMEOUT: loading stopped; returning partial page text"
+                    )
+                rid = "read_" + secrets.token_urlsafe(24)
+                item = {
+                    "principal": principal,
+                    "expires": time.time() + 600,
+                    "page": {
+                        "url": reader_safe_url(observed["page"]["url"]),
+                        "title": observed["page"]["title"],
+                    },
+                    "notices": notices,
+                    "read": {
+                        "complete": complete,
+                        "text": text,
+                        "total_chars": len(text),
+                        "text_capped": bool(
+                            obs.get("semantic_truncated") or obs.get("semantic_source_truncated")
+                        ),
+                        "links": [
+                            {
+                                "text": redact(link["text"])[:200],
+                                "url": reader_safe_url(link["url"]),
+                            }
+                            for link in obs.get("links", [])
+                        ],
+                        "links_truncated": bool(obs.get("links_truncated")),
+                        "resource_limited": bool(obs.get("resource_limited")),
+                        "protected_regions_omitted": bool(obs.get("protected_regions_omitted")),
+                        **(
+                            {"frame_reading_truncated": obs["frame_reading_truncated"]}
+                            if "frame_reading_truncated" in obs
+                            else {}
+                        ),
+                    },
+                }
+                owned = [
+                    key for key, value in self.read_cache.items() if value["principal"] == principal
+                ]
+                for old in owned[: max(0, len(owned) - 3)]:
+                    del self.read_cache[old]
+                self.read_cache[rid] = item
+                return self._read_slice(rid, item, offset, max_chars)
+            except BrowserError as exc:
+                if exc.code in ("CAPTCHA_REQUIRED", "BOT_BLOCKED", "PRIVACY_INSPECTION_INCOMPLETE"):
+                    exc.details["notices"] = [
+                        "The reader profile needs a human check later; manual reader control is planned"
+                    ]
+                raise
+            finally:
+                self._touch(self.reader_sid)
+
+    @asynccontextmanager
+    async def _command_lock_for_reader(self):
+        try:
+            await asyncio.wait_for(self.reader_lock.acquire(), self.cfg.command_queue_timeout)
+        except TimeoutError as exc:
+            raise BrowserError(
+                "BROWSER_BUSY", "Reader queue wait budget exceeded", busy_reason="queue_timeout"
+            ) from exc
+        try:
+            yield
+        finally:
+            self.reader_lock.release()
+
     @staticmethod
     def _operation_output(record):
         if not record:
@@ -579,14 +813,24 @@ class BrowserService:
         while not nav["done"].is_set():
             await asyncio.sleep(0.5)
             try:
-                async with self._command_lock():
+                remaining = (
+                    max(0.01, nav["started"] + nav["timeout_ms"] / 1000 - time.monotonic())
+                    if nav.get("reader")
+                    else None
+                )
+                async with self._command_lock(
+                    **({"timeout": remaining} if nav.get("reader") else {})
+                ):
                     if nav["done"].is_set():
                         break
+                    if nav.get("reader"):
+                        self._check_control(sid)
                     if self._active_control():
                         continue  # Even readiness probes collect no DOM during private control.
                     try:
+                        poll_options = {"readiness": "interactive"} if nav.get("reader") else {}
                         data = await self._rpc(
-                            "navigation_poll", session_id=sid, tab_id=nav["tab_id"]
+                            "navigation_poll", session_id=sid, tab_id=nav["tab_id"], **poll_options
                         )
                         result = response(**data)
                     except BrowserError as exc:
@@ -609,7 +853,11 @@ class BrowserService:
                             result["lease_id"] = nav["lease_id"]
                         self._finish_navigation(sid, nav, result)
             except BrowserError as exc:
-                if exc.code == "BROWSER_BUSY" and exc.details.get("busy_reason") == "queue_timeout":
+                if (
+                    exc.code == "BROWSER_BUSY"
+                    and exc.details.get("busy_reason") == "queue_timeout"
+                    and not nav.get("reader")
+                ):
                     # The page command was already sent. A delayed readiness probe
                     # is neither a failed navigation nor authority to abandon its
                     # worker job. Keep the journal pending; its next probe enforces
@@ -651,6 +899,7 @@ class BrowserService:
             "SESSION_CLOSED": "browser_open",
             "SESSION_NOT_FOUND": "browser_open",
             "LEASE_REQUIRED": "browser_open",
+            "READ_NOT_FOUND": "browser_read",
             "AUTH_REQUIRED": "browser_auth_request",
             "CAPTCHA_REQUIRED": "browser_handoff",
             "PRIVACY_INSPECTION_INCOMPLETE": "browser_handoff",
@@ -688,9 +937,14 @@ class BrowserService:
         return result
 
     @asynccontextmanager
-    async def _command_lock(self):
+    async def _command_lock(self, timeout=None):
         try:
-            await asyncio.wait_for(self.lock.acquire(), timeout=self.cfg.command_queue_timeout)
+            await asyncio.wait_for(
+                self.lock.acquire(),
+                timeout=min(self.cfg.command_queue_timeout, timeout)
+                if timeout is not None
+                else self.cfg.command_queue_timeout,
+            )
         except TimeoutError as exc:
             raise BrowserError(
                 "BROWSER_BUSY",
@@ -1715,6 +1969,7 @@ class BrowserService:
             "control_url": self.cfg.control_origin + "/",
             "capabilities": self._capabilities(),
             "scheduler": self._scheduler(),
+            "reader": self._reader_status(),
         }
         result["navigations"] = [
             {
@@ -1726,9 +1981,11 @@ class BrowserService:
                 "timeout_ms": nav["timeout_ms"],
             }
             for sid, nav in self.navigations.items()
-            if not session_id or sid == session_id
+            if sid != self.reader_sid and (not session_id or sid == session_id)
         ]
-        ids = [session_id] if session_id else list(self.sessions)
+        ids = (
+            [session_id] if session_id else [sid for sid in self.sessions if sid != self.reader_sid]
+        )
         for sid in ids:
             # Cached status remains available for expired work, especially while
             # a human still owns authentication/control. Never collect its page.
@@ -1816,3 +2073,4 @@ class BrowserService:
         for sid in self.sessions:
             self._remember_session(sid, "expired", "server_shutdown")
         self.sessions.clear()
+        self.read_cache.clear()

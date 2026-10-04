@@ -215,6 +215,30 @@ class ObserveOutput(BrowserOutput):
     observation: Observation | None = None
 
 
+class ReadLink(OutputModel):
+    text: str
+    url: str
+
+
+class ReadDetails(OutputModel):
+    read_id: str
+    complete: bool
+    text: str
+    offset: int
+    next_offset: int | None
+    total_chars: int
+    text_capped: bool
+    links: list[ReadLink]
+    links_truncated: bool
+    resource_limited: bool
+    protected_regions_omitted: bool
+    frame_reading_truncated: bool | None = None
+
+
+class ReadOutput(BrowserOutput):
+    read: ReadDetails | None = None
+
+
 class ActionPolicy(OutputModel):
     mode: str
     approval_required: bool
@@ -425,6 +449,11 @@ class Scheduler(OutputModel):
     owned_commands_can_queue: bool | None = None
 
 
+class ReaderStatus(OutputModel):
+    active: bool
+    idle_expires_at: str | None
+
+
 class StatusOutput(BrowserOutput):
     resources: Resources | None = None
     busy: bool | None = None
@@ -436,6 +465,7 @@ class StatusOutput(BrowserOutput):
     operation: Operation | None = None
     scheduler: Scheduler | None = None
     navigations: list[Navigation] | None = None
+    reader: ReaderStatus | None = None
 
 
 class OutputConfiguration(OutputModel):

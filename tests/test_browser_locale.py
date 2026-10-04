@@ -13,7 +13,7 @@ from cloud_browser.models import BrowserError
 
 @pytest.fixture
 def fake_adapter(tmp_path, monkeypatch):
-    def create(**settings):
+    def create(*, profile=None, **settings):
         adapter = object.__new__(DrissionAdapter)
         adapter.cfg = Settings(
             _env_file=None,
@@ -45,12 +45,52 @@ def fake_adapter(tmp_path, monkeypatch):
         adapter._capture_state = Mock()
         adapter._result = Mock(return_value={})
         monkeypatch.setattr("cloud_browser.drission.DisplayRuntime", Mock())
-        adapter.open("ses_test")
+        adapter.open("ses_test", profile=profile)
         adapter.Options.assert_called_once_with(read_file=False)
         adapter.Chromium.assert_called_once_with(options)
         return adapter, options, browser
 
     return create
+
+
+@pytest.mark.parametrize("profile", [None, "reader"])
+def test_explicit_reader_profile_and_cache_limit(fake_adapter, profile):
+    adapter, options, _ = fake_adapter(profile=profile)
+    directory = adapter.cfg.data_dir / "profiles" / (profile or "ses_test")
+    options.set_user_data_path.assert_called_once_with(str(directory))
+    assert directory.is_dir()
+    assert ("--disk-cache-size=67108864" in options.arguments) == (profile == "reader")
+
+
+def test_reader_observation_uses_snapshot_page_without_sdk_load_wait(fake_adapter):
+    adapter, _, _ = fake_adapter(profile="reader")
+    adapter._result.reset_mock()  # Ignore the initial blank-page open result.
+    tid = adapter.sessions["ses_test"]["selected"]
+    adapter._capture_page = Mock(
+        return_value={
+            "url": "https://blog.naver.com/PostView.naver?blogId=someuser&logNo=223456789012",
+            "title": "Public article",
+            "semantic_text": "Article text",
+            "viewport": {"width": 1024, "height": 768},
+            "interactive_truncated": False,
+            "semantic_source": "main",
+            "semantic_source_truncated": False,
+            "accessibility_source": "dom-fallback",
+            "scroll_scan_truncated": False,
+            "readable_frames": 0,
+            "frame_reading_truncated": False,
+            "frames": [],
+            "reader_links": [],
+            "protected": False,
+        }
+    )
+    result = adapter.observe(
+        "ses_test", tid, mode="semantic", reader_options={"collect_links": True}
+    )
+    assert "blogId=someuser" in result["page"]["url"]
+    assert result["page"]["title"] == "Public article"
+    assert result["observation"]["semantic_snapshot"] == "Article text"
+    adapter._result.assert_not_called()
 
 
 @pytest.mark.parametrize(

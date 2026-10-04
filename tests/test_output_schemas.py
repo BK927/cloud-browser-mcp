@@ -97,6 +97,25 @@ CONFIRMATION = {
 
 # Real service/engine wire shapes, including meaningful nulls and provider extensions.
 CASES = [
+    (
+        "read",
+        {"url": "https://example.com/"},
+        {
+            "read": {
+                "read_id": "read_test",
+                "complete": True,
+                "text": "Example",
+                "offset": 0,
+                "next_offset": None,
+                "total_chars": 7,
+                "text_capped": False,
+                "links": [{"text": "Link", "url": PAGE["url"]}],
+                "links_truncated": False,
+                "resource_limited": False,
+                "protected_regions_omitted": False,
+            }
+        },
+    ),
     ("open", {}, {"lease_id": "lease_test", "expires_at": "2026-09-09T12:00:00Z"}),
     (
         "list_tabs",
@@ -239,7 +258,7 @@ CASES = [
 
 
 @pytest.fixture
-def registered(monkeypatch, tmp_path):
+def registered(monkeypatch, tmp_path, request):
     mcp = MCPServer("schema-test")
     service = SimpleNamespace(call=AsyncMock(), _error_response=BrowserService._error_response)
     monkeypatch.setattr(server, "MCPServer", lambda *a, **kw: mcp)
@@ -247,9 +266,36 @@ def registered(monkeypatch, tmp_path):
     monkeypatch.setattr(server, "Auth", Mock())
     monkeypatch.setattr(server, "BrowserService", lambda *a, **kw: service)
     monkeypatch.setattr(server, "control_app", Mock())
-    server.create_apps(Settings(development=True, data_dir=tmp_path))
+    server.create_apps(
+        Settings(
+            development=True, data_dir=tmp_path, reader_enabled=getattr(request, "param", True)
+        )
+    )
     assert list(tmp_path.iterdir()) == []  # No real store/profile/runtime created.
     return mcp, service
+
+
+@pytest.mark.parametrize("registered", [False], indirect=True)
+async def test_reader_disabled_registration(registered):
+    tools = await registered[0].list_tools()
+    assert {tool.name for tool in tools} == {
+        "browser_" + name for name, _, _ in CASES if name != "read"
+    }
+
+
+async def test_reader_annotations_and_input_descriptions(registered):
+    tool = next(tool for tool in await registered[0].list_tools() if tool.name == "browser_read")
+    assert tool.annotations.read_only_hint is True
+    assert tool.annotations.destructive_hint is False
+    assert tool.annotations.open_world_hint is True
+    assert set(tool.input_schema["properties"]) == {
+        "url",
+        "read_id",
+        "offset",
+        "max_chars",
+        "selector",
+    }
+    assert all(prop.get("description") for prop in tool.input_schema["properties"].values())
 
 
 async def invoke(registered, name, arguments, payload):
@@ -281,15 +327,40 @@ async def test_every_registered_tool_has_meaningful_output_schema(registered):
         )
         assert len(schema["properties"]) > 11  # Includes method-specific result fields.
         assert schema["properties"]["revision"]["type"] == ["integer", "null"]
+    session_descriptors = [
+        t.model_dump(by_alias=True, exclude_none=True) for t in tools if t.name != "browser_read"
+    ]
+    # Retain the original 17-tool size budget and bound the additive reader
+    # descriptors separately; all 18 actual schemas are validated above.
+    status_schema = next(t for t in session_descriptors if t["name"] == "browser_status")[
+        "outputSchema"
+    ]
+    reader_status = {
+        "reader": status_schema["properties"].pop("reader"),
+        "ReaderStatus": status_schema["$defs"].pop("ReaderStatus"),
+    }
     size = len(
         json.dumps(
-            [t.model_dump(by_alias=True, exclude_none=True) for t in tools],
+            session_descriptors,
             ensure_ascii=False,
             separators=(",", ":"),
         ).encode()
     )
-    print(f"\n17 tools/list descriptors: {size} bytes including output schemas")
+    reader_size = len(
+        json.dumps(
+            next(t for t in tools if t.name == "browser_read").model_dump(
+                by_alias=True, exclude_none=True
+            ),
+            ensure_ascii=False,
+            separators=(",", ":"),
+        ).encode()
+    )
+    print(
+        f"\n17 session tools/list descriptors: {size} bytes; reader: {reader_size} bytes including output schemas"
+    )
     assert size < 100_000
+    assert reader_size < 5000
+    assert len(json.dumps(reader_status, separators=(",", ":")).encode()) < 500
     page_schema = tools[0].output_schema["$defs"]["Page"]
     assert "title" in page_schema["properties"]  # Keep the real page-title field.
     assert "title" not in page_schema["properties"]["title"]
@@ -297,7 +368,13 @@ async def test_every_registered_tool_has_meaningful_output_schema(registered):
 
 @pytest.mark.parametrize("name,arguments,extra", CASES, ids=[x[0] for x in CASES])
 async def test_success_result_preserves_wire_shape(registered, name, arguments, extra):
-    payload = response(session_id="ses_test", tab_id="tab_test", revision=1, page=PAGE, **extra)
+    payload = response(
+        session_id=None if name == "read" else "ses_test",
+        tab_id=None if name == "read" else "tab_test",
+        revision=None if name == "read" else 1,
+        page=PAGE,
+        **extra,
+    )
     payload["provider_extension"] = {"future": [None, 42]}
     await invoke(registered, name, arguments, payload)
 
