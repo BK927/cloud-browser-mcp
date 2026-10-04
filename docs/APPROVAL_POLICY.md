@@ -14,7 +14,7 @@ allow rules are not a complete multilingual side-effect classifier. Use strict
 mode when this remaining risk is unacceptable. The client must still follow the
 user's actual task and ignore instructions injected by page content.
 
-## Current balanced-v2 behavior
+## Current balanced-v3 behavior
 
 | Action | Automatic only when… |
 | --- | --- |
@@ -27,6 +27,15 @@ user's actual task and ignore instructions injected by page content.
 | JavaScript search with Enter | A named search control with a searchbox/search type or combobox and connected search structure; no unknown form submission override |
 | Tab / Escape | Existing valid non-protected target; no special exemption for other keys |
 | Scroll / pointer movement | Existing geometry/identity checks pass, as in strict mode |
+
+For plain native HTTP(S) anchor clicks/double-clicks without download/ping or form
+semantics, split the normalized link name on whitespace/punctuation. A Korean/Japanese
+deny word counts when (a) a token equals the word followed by the non-empty ending
+`하기|하다|합니다|하세요|해요|완료`, anywhere in the name, or (b) a token equals the
+bare word and the name has at most two tokens or that token is the final token.
+English matching is unchanged. In decoded hrefs, CJK deny words must be whole path
+segments separated by `/`, `-`, `_` or `.`; query values do not count.
+Buttons, role=button, forms, inputs, keys and strict mode keep their previous rules.
 
 Search-form recognition requires an explicit search landmark or search input,
 bounded form controls, no credential/file/contact controls and no suspicious
@@ -44,7 +53,7 @@ tool calls, and unclassified buttons/keys**. Known effect indicators override
 otherwise recognized view/link/search actions. Deny-word matching can have false
 positives and false negatives; it is an extra brake, not the security boundary.
 
-Ordinary edits can trigger autosave or page JavaScript. Balanced-v2 deliberately
+Ordinary edits can trigger autosave or page JavaScript. Balanced-v3 deliberately
 accepts that usability tradeoff; it does not prove that a select or text edit has
 no server-side effect. Use strict mode if such sites must remain per-action gated.
 Coordinate clicks on an identified, unchanged observed DOM element use the same
@@ -73,7 +82,7 @@ restriction was removed.
   must not execute again. RESULT_UNCERTAIN still locks subsequent actions until
   manual reconciliation. This is not a network-level idempotency guarantee.
 
-`browser_status.capabilities.approval_policy` is `strict-per-action` or `balanced-v2`.
+`browser_status.capabilities.approval_policy` is `strict-per-action` or `balanced-v3`.
 Successful actions and approval proposals include `action_policy` with `mode`,
 `approval_required` and a bounded `reason` code. These results contain no extra
 input values, page text or credentials. The MCP tool registry and annotations

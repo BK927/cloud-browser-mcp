@@ -230,11 +230,19 @@ def _public_ip(value: str) -> bool:
     return True
 
 
+class _AddressValidationError(ValueError):
+    def __init__(self, reason):
+        self.reason = reason
+        super().__init__("Destination is not globally routable")
+
+
 def public_addresses(host: str, port: int) -> list[str]:
     addresses = sorted({r[4][0] for r in socket.getaddrinfo(host, port, type=socket.SOCK_STREAM)})
 
-    if not addresses or any(not _public_ip(ip) for ip in addresses):
-        raise ValueError("Destination is not globally routable")
+    if not addresses:
+        raise _AddressValidationError("unresolved")
+    if any(not _public_ip(ip) for ip in addresses):
+        raise _AddressValidationError("private_address")
     return addresses
 
 
@@ -280,25 +288,31 @@ def _proxy_dns_check(host: str, port: int, proxy: str):
         if connection is not None:
             connection.close()
     if status == 403:
-        raise ValueError("Egress rejected the destination")
+        raise BrowserError(
+            "INVALID_URL", "Egress rejected the destination", reason="egress_rejected"
+        )
 
 
 def validate_url(url: str, *, dns_proxy: str | None = None):
+    reason = "missing" if not url else "scheme"
     try:
         p = urlsplit(url)
-        if (
-            p.scheme not in ("http", "https")
-            or not p.hostname
-            or p.username is not None
-            or p.password is not None
-        ):
+        if p.scheme not in ("http", "https"):
             raise ValueError("Only HTTP(S) URLs without credentials are supported")
+        reason = "missing"
+        if not p.hostname:
+            raise ValueError("URL requires a host")
+        reason = "credentials"
+        if p.username is not None or p.password is not None:
+            raise ValueError("Only HTTP(S) URLs without credentials are supported")
+        reason = "port"
         if p.port not in (None, 80, 443):
             raise ValueError("Only ports 80 and 443 are supported")
         try:
             literal = ipaddress.ip_address(p.hostname)
         except ValueError:
             literal = None
+        reason = "private_address"
         if literal is not None and not _public_ip(str(literal)):
             raise ValueError("Private or unsupported IP literal")
         port = p.port or (443 if p.scheme == "https" else 80)
@@ -308,7 +322,13 @@ def validate_url(url: str, *, dns_proxy: str | None = None):
             public_addresses(p.hostname, port)
     except (ValueError, OSError) as exc:
         raise BrowserError(
-            "INVALID_URL", "URL is unsupported, unresolved or targets a private network"
+            "INVALID_URL",
+            "URL is unsupported, unresolved or targets a private network",
+            reason="unresolved"
+            if isinstance(exc, OSError)
+            else exc.reason
+            if isinstance(exc, _AddressValidationError)
+            else reason,
         ) from exc
 
 

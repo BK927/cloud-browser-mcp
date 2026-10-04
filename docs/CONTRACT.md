@@ -330,6 +330,69 @@ WebMCP, passkey 전달, 인증 검증 지원 여부를 표시합니다. 지원 �
 
 ## 추가 오류
 
+오류 envelope의 `error`는 `code`, `message` 외에 `category`, `retryable`,
+`suggested_tool`, `next_step`을 제공합니다. `next_step`은 페이지 데이터가 없는 고정된
+짧은 영어 안내이며, `retryable`이 true여도 새 관찰·상태 확인 등 안내된 선행 조건을
+따라야 합니다. `privacy_guard`와 `page_limit`은 로컬 안전 제한으로, 사이트의 차단이나
+보안상 사용자 요청 거부를 뜻하지 않습니다.
+
+| category | 오류 코드 |
+| --- | --- |
+| `stale_state` | STALE_NODE, STALE_REVISION, STALE_SCREENSHOT, CURSOR_STALE, FRAME_STALE, SCREEN_CHANGED, DOM_TARGET_AVAILABLE |
+| `capacity` | BROWSER_BUSY, RESOURCE_PRESSURE, CAPTURE_TIMEOUT, WORKER_TIMEOUT, CLEANUP_REQUIRED |
+| `approval` | CONFIRMATION_REQUIRED, CONFIRMATION_STALE, CONFIRMATION_USED, CONFIRMATION_DENIED, ACTION_ALREADY_DISPATCHED |
+| `navigation` | NAVIGATION_TIMEOUT, NAVIGATION_FAILED, NAVIGATION_CANCELLED, NAVIGATION_IN_PROGRESS |
+| `target` | NODE_NOT_ACTIONABLE, NODE_AMBIGUOUS, NODE_NOT_FOUND, TAB_NOT_FOUND, FRAME_UNAVAILABLE, ACTION_GOAL_NOT_MET |
+| `input` | INVALID_INPUT, INVALID_URL, INVALID_SELECTOR, INVALID_COORDINATES, READ_NOT_FOUND, LEASE_REQUIRED, LEASE_INVALID, OPERATION_CONFLICT, UNSUPPORTED_OPERATION |
+| `page_limit` | PRIVACY_INSPECTION_INCOMPLETE |
+| `privacy_guard` | SENSITIVE_SCREEN, SENSITIVE_INPUT, SENSITIVE_TARGET, SENSITIVE_CONTENT, POLICY_BLOCKED |
+| `site_challenge` | CAPTCHA_REQUIRED, BOT_BLOCKED, AUTH_REQUIRED |
+| `human_control` | USER_CONTROL_ACTIVE, AUTH_IN_PROGRESS, HANDOFF_UNAVAILABLE |
+| `session` | SESSION_EXPIRED, SESSION_NOT_FOUND, SESSION_CLOSED |
+| `uncertain` | RESULT_UNCERTAIN |
+| `browser` | 위에 없는 오류 코드 |
+
+재시도 가능 표시는 모든 `stale_state` 코드와 BROWSER_BUSY, RESOURCE_PRESSURE,
+CAPTURE_TIMEOUT, CONFIRMATION_STALE에만 true입니다. RESULT_UNCERTAIN,
+ACTION_ALREADY_DISPATCHED, CONFIRMATION_USED/DENIED는 계속 false이며 이미 전달된
+행동을 반복하지 않습니다. stale/target/navigation 및 CONFIRMATION_STALE,
+ACTION_ALREADY_DISPATCHED, CONFIRMATION_USED는 `browser_observe`, READ_NOT_FOUND는
+`browser_read`, session과 LEASE_REQUIRED는 `browser_open`, capacity는 `browser_status`를
+안내합니다. RESULT_UNCERTAIN, CAPTCHA_REQUIRED, BOT_BLOCKED,
+PRIVACY_INSPECTION_INCOMPLETE의 `browser_handoff` 안내는 운영자 수동 제어가 활성화되고
+해당 도구가 등록된 경우에만 제공합니다. 그 밖에는 RESULT_UNCERTAIN에 `browser_close`,
+나머지 세 코드에 null을 반환합니다. AUTH_REQUIRED의 `browser_auth_request`와
+SENSITIVE_SCREEN의 `browser_observe` 등 기존 안내는 유지됩니다.
+
+`reason`은 기존 STALE_NODE와 같이 응답 최상위 오류 details에 둡니다. 선택적 캡처가
+생략되면 `observation.screenshot_omitted.reason`에 둡니다. 원문 URL·호스트·본문·선택자를
+넣지 않고 다음 고정값만 사용합니다.
+
+- INVALID_URL: `scheme`(미지원 스킴/URL 구문), `credentials`(userinfo), `port`(미지원/잘못된 포트),
+  `private_address`(비공개·미지원 IP 또는 DNS 결과), `unresolved`(DNS 확인 실패),
+  `egress_rejected`(egress 정책 거절), `missing`(URL/호스트 누락).
+- SENSITIVE_SCREEN: `secret_text`(알려진 비밀 문자열), `iframe_policy`(프레임 정책/가려진 영역),
+  `privacy_incomplete`(검사 미완료), `mask_unsafe`(안전한 마스킹 불가),
+  `mask_unbounded`(경계를 확정할 수 없음), `too_many_regions`(마스킹 영역 수 초과).
+
+PRIVACY_INSPECTION_INCOMPLETE는 이제 `blocked` 대신 `error`이며 메시지는
+`Page exceeds the bounded privacy scan (element/input budget); size limit, not a detected secret`입니다.
+요소/입력 검사 예산을 넘긴 관찰·행동의 거절 동작은 유지되며 실제 비밀값 발견을 의미하지 않습니다.
+
+`browser_status.recent_errors`는 호출 principal의 최근 오류 요약 최대 20건을 시간 순서로
+반환합니다. 세션/lease 없는 조회와 소유 세션/lease 조회 모두 제공하며, 각 항목은
+`{tool, code, category, request_id, at}`입니다. `tool`은 MCP 메서드명, `at`은 UTC ISO 시각입니다.
+페이지·입력 데이터는 없고 메모리에만 보관하며 종료 시 지웁니다. 전체 principal 저장소도
+최근 사용한 최대 128개로 제한합니다. 세션/lease 없는 status의 `approvals`에는 호출 principal이
+소유한 세션들의 승인 요약만 반환합니다. 세션별 조회와 동일한 summary/state/expires_at 및
+존재할 경우 approval_state를 제공하고, 승인 토큰과 입력값은 반환하지 않습니다.
+
+기존 용량 이벤트는 `browser_capacity` 형식을 유지합니다. 그 밖의 오류는
+`{"event":"browser_error","request_id":"req_…","code":"…","category":"…"}`로 기록하며,
+두 종류가 분당 120건 예산과 request_id 검증을 공유합니다. 메시지·URL·호스트·선택자·details는
+기록하지 않습니다. 선택적 캡처/완료 확인 오류도 외부 응답 request_id로 연결하고, 같은
+request_id/code의 작업 결과 재조회는 제한된 최근 중복 이력 안에서 다시 기록하지 않습니다.
+
 탐색 호출별 `timeout_ms`와 탭 설정 `navigation_timeout_ms`를 지원합니다.
 우선순위는 호출 → 탭 → 운영자 기본값(새 설치 60000ms)이며 운영자 상한은 기본
 300000ms입니다. 탐색의 첫 응답은 최대 5초를 기다리고, 미완료이면 `no_change`와

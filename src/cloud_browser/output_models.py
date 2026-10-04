@@ -68,9 +68,11 @@ class Error(OutputModel):
     retryable: bool | None = None
     suggested_tool: str | None = None
     category: str | None = None
+    next_step: str | None = None
 
 
 class CaptureOmission(Error):
+    reason: str | None = None
     capture_reasons: list[str] | None = None
     capture_attempts: int | None = None
 
@@ -83,7 +85,7 @@ class BrowserOutput(OutputModel):
     session_id: str | None
     tab_id: str | None
     selected_tab_id: str | None = None
-    revision: int | None = Field(description="For actions.")
+    revision: int | None
     page: Page | None
     notices: list[str]
     error: Error | None
@@ -104,7 +106,7 @@ class Navigation(NavigationDetails):
     operation: Literal["goto", "back", "forward", "reload"] | None = None
     redirected: bool | None = None
     navigation_occurred: bool | None = None
-    pending: bool | None = Field(None, description="Not complete.")
+    pending: bool | None = None
     operation_id: str | None = None
     phase: (
         Literal[
@@ -156,7 +158,7 @@ class Region(Viewport):
 
 
 class Screenshot(Viewport):
-    screenshot_id: str = Field(description="Required for coordinate actions; image is in content.")
+    screenshot_id: str = Field(description="Coordinate action ID; image in content.")
     coordinate_units: str
     full_page: bool
     masked_regions: list[Region]
@@ -183,10 +185,10 @@ class FileChooser(OutputModel):
 class Observation(OutputModel):
     semantic_snapshot: str | None = None
     interactive_snapshot: str | None = Field(
-        None, description="JSON lines of observed nodes; node_id identifies action targets."
+        None, description="Node JSON lines with action node_id."
     )
     truncated: bool | None = None
-    next_cursor: str | None = Field(None, description="Revision-bound cursor for browser_observe.")
+    next_cursor: str | None = Field(None, description="Revision-bound cursor.")
     semantic_truncated: bool | None = None
     interactive_page_truncated: bool | None = None
     interactive_truncated: bool | None = None
@@ -261,7 +263,7 @@ class SentField(OutputModel):
 
 
 class Confirmation(OutputModel):
-    confirmation_token: str = Field(description="Single-use, console-approved token.")
+    confirmation_token: str = Field(description="Single-use console-approved token.")
     approval_state: Literal["pending", "approved"]
     summary: str
     current_page: str
@@ -305,15 +307,13 @@ class Dialog(OutputModel):
 
 class PageToolResult(OutputModel):
     tool_name: str
-    output: Any = Field(description="Untrusted page-defined JSON; shape is supplied by the page.")
+    output: Any = Field(description="Untrusted page-defined JSON.")
     untrusted: bool
 
 
 class Operation(OutputModel):
     state: Literal["not_found", "running", "completed"]
-    result: BrowserOutput | None = Field(
-        None, description="Saved original tool response, if completed."
-    )
+    result: BrowserOutput | None = Field(None, description="Original completed response.")
     navigation: Navigation | None = None
 
 
@@ -415,6 +415,15 @@ class Approval(OutputModel):
     state: str
     summary: str
     expires_at: str
+    approval_state: str | None = None
+
+
+class RecentError(OutputModel):
+    tool: str
+    code: str
+    category: str
+    request_id: str
+    at: str
 
 
 class Capabilities(OutputModel):
@@ -460,6 +469,7 @@ class StatusOutput(BrowserOutput):
     busy: bool | None = None
     sessions: list[Session] | None = None
     approvals: list[Approval] | None = None
+    recent_errors: list[RecentError] | None = None
     staged_uploads: list[Upload] | None = None
     control_url: str | None = None
     capabilities: Capabilities | None = None

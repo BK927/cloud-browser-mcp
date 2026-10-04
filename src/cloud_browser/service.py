@@ -3,7 +3,9 @@ import hashlib
 import json
 import secrets
 import time
+from collections import OrderedDict, deque
 from contextlib import asynccontextmanager
+from contextvars import ContextVar
 from datetime import UTC, datetime
 
 from pydantic import ValidationError
@@ -11,6 +13,7 @@ from pydantic import ValidationError
 from .approval import PASSIVE_ACTIONS
 from .authentication import MANUAL_METHODS
 from .config import Settings
+from .error_policy import PAGE_LIMIT_MESSAGE, error_metadata
 from .models import BrowserError, ObservationQuery, WaitCondition, response
 from .navigation_pacing import NavigationPacer
 from .operation_diagnostics import log_capacity
@@ -24,6 +27,9 @@ from .worker import Worker
 
 def iso(timestamp):
     return datetime.fromtimestamp(timestamp, UTC).isoformat()
+
+
+_error_context = ContextVar("browser_error_context", default=None)
 
 
 class BrowserService:
@@ -53,6 +59,9 @@ class BrowserService:
         self.reader_lock = asyncio.Lock()
         self.read_cache = {}
         self.navigation_pacer = NavigationPacer(settings)
+        self.handoff_registered = False
+        self.recent_errors = OrderedDict()
+        self.diagnosed_errors = OrderedDict()
 
     def start(self):
         if self.sweeper is None:
@@ -340,7 +349,7 @@ class BrowserService:
         """
         context = {"deadline": time.monotonic() + 5} if method in ("open", "navigate") else {}
         task = asyncio.create_task(
-            self._call_owned(method, _principal, lease_id, operation_id, args, context)
+            self._call_diagnosed(method, _principal, lease_id, operation_id, args, context)
         )
         self.tasks.add(task)
         task.add_done_callback(self.tasks.discard)
@@ -356,13 +365,15 @@ class BrowserService:
             # Still queued or validating: abandon before dispatch, without
             # cancelling cleanup/IPC and invalidating another work's browser.
             context["abandoned"] = True
-            return self._error_response(
+            result = self._error_response(
                 BrowserError(
                     "BROWSER_BUSY",
                     "Navigation was not dispatched within the initial response budget; poll status",
                     busy_reason="queue_timeout",
                 )
             )
+            self._diagnose_result(result, _principal, "browser_" + method)
+            return result
 
     async def _call_owned(self, method, principal, lease_id, operation_id, args, context=None):
         context = context if context is not None else {}
@@ -402,7 +413,7 @@ class BrowserService:
                         busy=scheduler["state"] != "available",
                         scheduler=scheduler,
                         sessions=[],
-                        approvals=[],
+                        approvals=self._approval_summaries(principal=principal),
                         staged_uploads=[],
                         capabilities=self._capabilities(),
                         reader=self._reader_status(),
@@ -486,7 +497,10 @@ class BrowserService:
                 nav_sid = result["session_id"]
                 nav = self.navigations[nav_sid]
                 nav.update(
-                    principal=principal, lease_id=result.get("lease_id", lease_id), result=result
+                    principal=principal,
+                    lease_id=result.get("lease_id", lease_id),
+                    result=result,
+                    tool="browser_" + method,
                 )
                 nav_key = (principal, nav["lease_id"], nav["operation_id"])
                 if key:
@@ -807,6 +821,7 @@ class BrowserService:
 
     def _finish_navigation(self, sid, nav, result):
         self._touch(sid)  # Active execution, not status polling, renews idle TTL.
+        self._diagnose_result(result, nav.get("principal"), nav.get("tool"))
         nav["result"] = result | {"operation_id": nav["operation_id"]}
         for key in nav["keys"]:
             if key in self.operations:
@@ -893,55 +908,86 @@ class BrowserService:
                 ),
             )
 
-    @staticmethod
-    def _error_response(exc, sid=None, tid=None):
-        recovery = {
-            "STALE_NODE": "browser_observe",
-            "STALE_REVISION": "browser_observe",
-            "STALE_SCREENSHOT": "browser_observe",
-            "CURSOR_STALE": "browser_observe",
-            "DOM_TARGET_AVAILABLE": "browser_observe",
-            "TAB_NOT_FOUND": "browser_list_tabs",
-            "SESSION_EXPIRED": "browser_open",
-            "SESSION_CLOSED": "browser_open",
-            "SESSION_NOT_FOUND": "browser_open",
-            "LEASE_REQUIRED": "browser_open",
-            "READ_NOT_FOUND": "browser_read",
-            "AUTH_REQUIRED": "browser_auth_request",
-            "CAPTCHA_REQUIRED": "browser_handoff",
-            "PRIVACY_INSPECTION_INCOMPLETE": "browser_handoff",
-            "FRAME_UNAVAILABLE": "browser_observe",
-            "ACTION_GOAL_NOT_MET": "browser_observe",
-            "RESULT_UNCERTAIN": "browser_handoff",
-            "SENSITIVE_SCREEN": "browser_observe",
-        }
+    async def _call_diagnosed(self, method, principal, lease_id, operation_id, args, context):
+        token = _error_context.set((principal, "browser_" + method))
+        try:
+            result = await self._call_owned(
+                method, principal, lease_id, operation_id, args, context
+            )
+            self._diagnose_result(result)
+            if method == "status":
+                result["recent_errors"] = list(self.recent_errors.get(principal, ()))
+            return result
+        finally:
+            _error_context.reset(token)
+
+    def _error_response(self, exc, sid=None, tid=None):
+        page_limit = exc.code == "PRIVACY_INSPECTION_INCOMPLETE"
         result = response(
-            exc.status,
+            "error" if page_limit else exc.status,
             session_id=sid,
             tab_id=tid,
             error={
                 "code": exc.code,
-                "message": exc.message,
-                "category": "capacity"
-                if exc.code in ("BROWSER_BUSY", "RESOURCE_PRESSURE")
-                else "browser",
-                "retryable": exc.code
-                in (
-                    "STALE_NODE",
-                    "STALE_REVISION",
-                    "STALE_SCREENSHOT",
-                    "CURSOR_STALE",
-                    "BROWSER_BUSY",
-                    "RESOURCE_PRESSURE",
+                "message": PAGE_LIMIT_MESSAGE if page_limit else exc.message,
+                **error_metadata(
+                    exc.code,
+                    handoff_available=self.cfg.manual_control_enabled and self.handoff_registered,
                 ),
-                "suggested_tool": recovery.get(exc.code, "browser_status"),
             },
             **exc.details,
         )
-        # Payload-free correlation: no URLs, identifiers, arguments or credentials.
-        # Request IDs in tool responses now have an exact match in operational logs.
-        log_capacity(result)
         return result
+
+    def _diagnose_result(self, result, principal=None, tool=None):
+        if tool is None and (context := _error_context.get()) is not None:
+            principal, tool = context
+        # Visit only protocol error slots, never arbitrary page-tool JSON or payloads.
+        slots = [result]
+        for name in ("completion", "follow_up", "wait", "observation"):
+            value = result.get(name)
+            if isinstance(value, dict):
+                slots.append(value)
+                if isinstance(value.get("screenshot_omitted"), dict):
+                    slots.append({"error": value["screenshot_omitted"]})
+        for slot in slots:
+            error = slot.get("error")
+            if not isinstance(error, dict) or not error.get("code"):
+                continue
+            error.update(
+                error_metadata(
+                    error["code"],
+                    handoff_available=self.cfg.manual_control_enabled and self.handoff_registered,
+                )
+            )
+            key = (result["request_id"], error["code"])
+            if key in self.diagnosed_errors:
+                continue  # Replayed operation results are the same error event.
+            if len(self.diagnosed_errors) >= 512:
+                self.diagnosed_errors.popitem(last=False)
+            self.diagnosed_errors[key] = None
+            diagnostic = result | {"error": error}
+            log_capacity(diagnostic)
+            if tool is not None:
+                self._remember_error(principal, tool, diagnostic)
+
+    def _remember_error(self, principal, tool, result):
+        if principal not in self.recent_errors:
+            # Cap principals as well as each principal's history (LRU).
+            if len(self.recent_errors) >= 128:
+                self.recent_errors.popitem(last=False)
+            self.recent_errors[principal] = deque(maxlen=20)
+        self.recent_errors.move_to_end(principal)
+        error = result["error"]
+        self.recent_errors[principal].append(
+            {
+                "tool": tool,
+                "code": error["code"],
+                "category": error["category"],
+                "request_id": result["request_id"],
+                "at": iso(time.time()),
+            }
+        )
 
     @asynccontextmanager
     async def _command_lock(self, timeout=None):
@@ -977,7 +1023,7 @@ class BrowserService:
         if method == "open" or (method == "navigate" and args.get("operation") == "goto"):
             url = args.get("url")
             if method == "navigate" and not url:
-                raise BrowserError("INVALID_URL", "goto requires a URL")
+                raise BrowserError("INVALID_URL", "goto requires a URL", reason="missing")
             if url:
                 await self._validate_navigation_url(url)
         elif method == "navigate" and args.get("operation") == "reload":
@@ -1574,12 +1620,12 @@ class BrowserService:
                 if not result["completion"].get("matched"):
                     uncertain = bool(result["completion"].get("partial"))
                     result["status"] = "error"
-                    result["error"] = {
-                        "code": "RESULT_UNCERTAIN" if uncertain else "ACTION_GOAL_NOT_MET",
-                        "message": "Action was dispatched but its requested completion condition was not met; observe before any new action",
-                        "retryable": False,
-                        "suggested_tool": "browser_handoff" if uncertain else "browser_observe",
-                    }
+                    result["error"] = self._error_response(
+                        BrowserError(
+                            "RESULT_UNCERTAIN" if uncertain else "ACTION_GOAL_NOT_MET",
+                            "Action was dispatched but its requested completion condition was not met; observe before any new action",
+                        )
+                    )["error"]
                     if uncertain:
                         self.sessions[session_id]["uncertain"] = True
             except BrowserError as exc:
@@ -1588,12 +1634,12 @@ class BrowserService:
                     "error": {"code": exc.code, "message": exc.message},
                 }
                 result["status"] = "error"
-                result["error"] = {
-                    "code": "RESULT_UNCERTAIN",
-                    "message": "Action was dispatched but completion could not be observed; do not repeat it",
-                    "retryable": False,
-                    "suggested_tool": "browser_handoff",
-                }
+                result["error"] = self._error_response(
+                    BrowserError(
+                        "RESULT_UNCERTAIN",
+                        "Action was dispatched but completion could not be observed; do not repeat it",
+                    )
+                )["error"]
                 self.sessions[session_id]["uncertain"] = True
         if follow_up and not result.get("dialog"):
             try:
@@ -2055,23 +2101,35 @@ class BrowserService:
             "webmcp_read_allowlist": bool(self.cfg.webmcp_read_allowlist),
         }
 
-    async def _status(self, session_id=None):
+    def _approval_summaries(self, session_id=None, *, principal=None):
         self.pending = {
             key: item for key, item in self.pending.items() if item["expires"] > time.time()
         }
         approvals = []
         for item in self.pending.values():
+            if session_id and item["session_id"] != session_id:
+                continue
+            if (
+                principal is not None
+                and self.owners.get(item["session_id"], {}).get("principal") != principal
+            ):
+                continue
             record = self.store.get("approval", item["token"])
-            if record and (not session_id or item["session_id"] == session_id):
-                approvals.append(
-                    {
-                        "session_id": item["session_id"],
-                        "tab_id": item["tab_id"],
-                        "state": record["state"],
-                        "summary": item["confirmation"]["summary"],
-                        "expires_at": iso(item["expires"]),
-                    }
-                )
+            if record:
+                summary = {
+                    "session_id": item["session_id"],
+                    "tab_id": item["tab_id"],
+                    "state": record["state"],
+                    "summary": item["confirmation"]["summary"],
+                    "expires_at": iso(item["expires"]),
+                }
+                if "approval_state" in item["confirmation"]:
+                    summary["approval_state"] = record["state"]
+                approvals.append(summary)
+        return approvals
+
+    async def _status(self, session_id=None):
+        approvals = self._approval_summaries(session_id)
         result = {
             "session_id": session_id,
             "resources": self.resources(),
@@ -2192,3 +2250,5 @@ class BrowserService:
             self._remember_session(sid, "expired", "server_shutdown")
         self.sessions.clear()
         self.read_cache.clear()
+        self.recent_errors.clear()
+        self.diagnosed_errors.clear()

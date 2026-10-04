@@ -161,7 +161,25 @@ CASES = [
         IDS | {"scope": "tab"},
         {"selected_tab_id": None, "session_closed": True, "termination_reason": "last_tab_closed"},
     ),
-    ("status", {}, {"busy": False, "sessions": [], "approvals": [], "staged_uploads": []}),
+    (
+        "status",
+        {},
+        {
+            "busy": False,
+            "sessions": [],
+            "approvals": [],
+            "staged_uploads": [],
+            "recent_errors": [
+                {
+                    "tool": "browser_observe",
+                    "code": "STALE_NODE",
+                    "category": "stale_state",
+                    "request_id": "req_fixture",
+                    "at": "2026-10-05T12:00:00+00:00",
+                }
+            ],
+        },
+    ),
     (
         "configure",
         IDS | {"configuration": {"max_chars": 1000}},
@@ -261,7 +279,13 @@ CASES = [
 @pytest.fixture
 def registered(monkeypatch, tmp_path, request):
     mcp = MCPServer("schema-test")
-    service = SimpleNamespace(call=AsyncMock(), _error_response=BrowserService._error_response)
+    service = SimpleNamespace(
+        call=AsyncMock(),
+        cfg=Settings(development=True),
+        handoff_registered=False,
+        _diagnose_result=Mock(),
+    )
+    service._error_response = lambda exc: BrowserService._error_response(service, exc)
     monkeypatch.setattr(server, "MCPServer", lambda *a, **kw: mcp)
     monkeypatch.setattr(server, "Store", Mock())
     monkeypatch.setattr(server, "Auth", Mock())
@@ -319,6 +343,7 @@ async def invoke(registered, name, arguments, payload):
 async def test_every_registered_tool_has_meaningful_output_schema(registered):
     tools = await registered[0].list_tools()
     assert {t.name for t in tools} == {"browser_" + name for name, _, _ in CASES}
+    assert registered[1].handoff_registered is True
     for tool in tools:
         schema = tool.output_schema
         Draft202012Validator.check_schema(schema)
@@ -383,7 +408,7 @@ async def test_success_result_preserves_wire_shape(registered, name, arguments, 
 @pytest.mark.parametrize("name,arguments,_", CASES, ids=[x[0] for x in CASES])
 @pytest.mark.parametrize("status", ["error", "blocked", "user_action_required"])
 async def test_error_envelopes_match_advertised_schema(registered, name, arguments, _, status):
-    payload = BrowserService._error_response(
+    payload = registered[1]._error_response(
         BrowserError(
             "AUTH_REQUIRED",
             "Use the private console",
@@ -393,6 +418,50 @@ async def test_error_envelopes_match_advertised_schema(registered, name, argumen
         )
     )
     await invoke(registered, name, arguments, payload)
+
+
+@pytest.mark.parametrize(
+    "code,reason,category",
+    [("INVALID_URL", "scheme", "input"), ("SENSITIVE_SCREEN", "iframe_policy", "privacy_guard")],
+)
+async def test_reason_and_next_step_schema_preserves_top_level_details(
+    registered, code, reason, category
+):
+    payload = registered[1]._error_response(BrowserError(code, "Static message", reason=reason))
+    assert payload["reason"] == reason
+    assert "reason" not in payload["error"]
+    assert payload["error"]["category"] == category
+    schema = next(
+        t.output_schema for t in await registered[0].list_tools() if t.name == "browser_observe"
+    )
+    assert schema["$defs"]["Error"]["properties"]["next_step"]["type"] == ["string", "null"]
+    await invoke(registered, "observe", IDS, payload)
+
+
+async def test_status_schema_declares_recent_error_fields_and_rejects_wrong_types(registered):
+    schema = next(
+        t.output_schema for t in await registered[0].list_tools() if t.name == "browser_status"
+    )
+    assert set(schema["$defs"]["RecentError"]["required"]) == {
+        "tool",
+        "code",
+        "category",
+        "request_id",
+        "at",
+    }
+    payload = response(
+        recent_errors=[
+            {
+                "tool": "browser_read",
+                "code": "INVALID_URL",
+                "category": "input",
+                "request_id": "req_fixture",
+                "at": 123,
+            }
+        ]
+    )
+    with pytest.raises(ValidationError):
+        Draft202012Validator(schema).validate(payload)
 
 
 @pytest.mark.parametrize("name", ["act", "call_page_tool", "dialog", "clipboard"])

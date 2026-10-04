@@ -12,20 +12,38 @@ from .models import BrowserError
 def mask_frames(encoded: str, regions: list[dict], viewport: dict) -> tuple[str, list[dict]]:
     if len(regions) > 100 or any(not r.get("mask_safe", False) for r in regions):
         raise BrowserError(
-            "SENSITIVE_SCREEN", "Embedded content cannot be safely bounded for masking", "blocked"
+            "SENSITIVE_SCREEN",
+            "Embedded content cannot be safely bounded for masking",
+            "blocked",
+            reason="too_many_regions" if len(regions) > 100 else "mask_unsafe",
         )
     image = Image.open(io.BytesIO(base64.b64decode(encoded))).convert("RGB")
     if image.size != (viewport["width"], viewport["height"]):
-        raise BrowserError("SENSITIVE_SCREEN", "Capture geometry does not match viewport", "blocked")
+        raise BrowserError(
+            "SENSITIVE_SCREEN",
+            "Capture geometry does not match viewport",
+            "blocked",
+            reason="mask_unsafe",
+        )
     draw = ImageDraw.Draw(image)
     masked = []
     for region in regions:
         values = [region.get(k) for k in ("x", "y", "width", "height")]
         if any(not isinstance(v, (int, float)) or not math.isfinite(v) for v in values):
-            raise BrowserError("SENSITIVE_SCREEN", "Invalid embedded content bounds", "blocked")
+            raise BrowserError(
+                "SENSITIVE_SCREEN",
+                "Invalid embedded content bounds",
+                "blocked",
+                reason="mask_unbounded",
+            )
         x, y, width, height = values
         if width < 0 or height < 0:
-            raise BrowserError("SENSITIVE_SCREEN", "Invalid embedded content bounds", "blocked")
+            raise BrowserError(
+                "SENSITIVE_SCREEN",
+                "Invalid embedded content bounds",
+                "blocked",
+                reason="mask_unbounded",
+            )
         # Include JPEG block boundaries; return PNG so no new lossy edge bleed occurs.
         left = max(0, math.floor(x) - 16)
         top = max(0, math.floor(y) - 16)

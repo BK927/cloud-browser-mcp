@@ -1,4 +1,4 @@
-"""Bounded, payload-free capacity diagnostics correlated with MCP request IDs."""
+"""Bounded, payload-free error diagnostics correlated with MCP request IDs."""
 
 import json
 import re
@@ -6,6 +6,7 @@ import threading
 import time
 from collections import deque
 
+from .error_policy import CODE_CATEGORY
 from .http_diagnostics import diagnostic_logger
 
 _logger = diagnostic_logger()
@@ -29,9 +30,11 @@ _reasons = {
 
 def log_capacity(result):
     try:
-        code = (result.get("error") or {}).get("code")
+        code = (result.get("error") or {}).get("code", "")
         request_id = result.get("request_id", "")
-        if code not in _codes or not re.fullmatch(r"req_[A-Za-z0-9_-]{1,64}", request_id):
+        if not re.fullmatch(r"[A-Z][A-Z0-9_]{0,63}", code) or not re.fullmatch(
+            r"req_[A-Za-z0-9_-]{1,64}", request_id
+        ):
             return
         with _lock:
             now = time.monotonic()
@@ -41,15 +44,21 @@ def log_capacity(result):
                 return
             _events.append(now)
         reason = result.get("busy_reason")
-        _logger.info(
-            json.dumps(
-                {
-                    "event": "browser_capacity",
-                    "request_id": request_id,
-                    "code": code,
-                    "reason": reason if reason in _reasons else None,
-                }
-            )
+        payload = (
+            {
+                "event": "browser_capacity",
+                "request_id": request_id,
+                "code": code,
+                "reason": reason if reason in _reasons else None,
+            }
+            if code in _codes
+            else {
+                "event": "browser_error",
+                "request_id": request_id,
+                "code": code,
+                "category": CODE_CATEGORY.get(code, "browser"),
+            }
         )
+        _logger.info(json.dumps(payload))
     except Exception:
         pass  # Diagnostics must never print locals or break the browser result.

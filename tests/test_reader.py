@@ -217,13 +217,19 @@ async def test_reader_timeout_partial_and_navigation_errors(reader):
 
 
 @pytest.mark.parametrize(
-    "guard", ["CAPTCHA_REQUIRED", "BOT_BLOCKED", "PRIVACY_INSPECTION_INCOMPLETE"]
+    "guard,status",
+    [
+        ("CAPTCHA_REQUIRED", "blocked"),
+        ("BOT_BLOCKED", "blocked"),
+        ("PRIVACY_INSPECTION_INCOMPLETE", "error"),
+    ],
 )
-async def test_reader_preserves_page_guards(reader, guard):
+async def test_reader_preserves_page_guards(reader, guard, status):
     service, state = reader
     state["guard"] = guard
     result = await read(service)
-    assert result["status"] == "blocked" and result["error"]["code"] == guard
+    assert result["status"] == status and result["error"]["code"] == guard
+    assert "read" not in result
     assert any("human check later" in notice for notice in result["notices"])
 
 

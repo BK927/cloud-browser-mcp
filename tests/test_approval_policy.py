@@ -21,6 +21,141 @@ SEARCH = {
 }
 
 
+@pytest.mark.parametrize(
+    "name",
+    [
+        "자유게시판",
+        "게시글 목록",
+        "등록일순",
+        "주문 많은 순",
+        "보안 취약점 분석 기사",
+        "구독자 많은 채널",
+        "削除記事",
+        "注文履歴",
+        "Undeleted articles",
+    ],
+)
+@pytest.mark.parametrize("action", [{"type": "click"}, {"type": "double_click"}])
+def test_balanced_plain_link_names_use_cjk_tokens(name, action):
+    assert decide("balanced", action, LINK | {"name": name}, PAGE) == {
+        "mode": "balanced",
+        "approval_required": False,
+        "reason": "http_navigation",
+    }
+    assert decide("strict", action, LINK | {"name": name}, PAGE)["approval_required"]
+
+
+@pytest.mark.parametrize(
+    "name",
+    [
+        "삭제",
+        "로그아웃",
+        "구독하기",
+        "결제 완료",
+        "회원 탈퇴",
+        "게시하기",
+        "Delete",
+        "Sign out",
+        "(삭제)",
+        "削除",
+        "権限",
+        "권한",
+        "등록 완료",
+    ],
+)
+def test_balanced_plain_link_deny_tokens_still_require_approval(name):
+    assert decide("balanced", {"type": "click"}, LINK | {"name": name}, PAGE)["approval_required"]
+
+
+@pytest.mark.parametrize("ending", ["하기", "하다", "합니다", "하세요", "해요", "완료"])
+@pytest.mark.parametrize("word", ["삭제", "인증"])
+def test_balanced_plain_link_deny_endings(ending, word):
+    assert decide("balanced", {"type": "click"}, LINK | {"name": word + ending}, PAGE)[
+        "approval_required"
+    ]
+    assert decide(
+        "balanced", {"type": "click"}, LINK | {"name": "공개 " + word + ending + " 후기"}, PAGE
+    )["approval_required"]
+
+
+@pytest.mark.parametrize(
+    "name,approval_required",
+    [
+        ("합격 인증 후기", False),
+        ("인증하기", True),
+        ("보안", True),
+        ("계정 보안", True),
+        ("구독자 많은 채널", False),
+        ("결제 완료", True),
+        ("주문 많은 삭제", True),
+        ("최근 인증 후기", False),
+        ("인증 후기", True),
+        ("공개 결제완료 후기", True),
+        ("削除、関連、記事", False),
+        ("最新、記事、削除", True),
+    ],
+)
+def test_balanced_plain_link_name_position_and_token_count(name, approval_required):
+    for action in ({"type": "click"}, {"type": "double_click"}):
+        assert (
+            decide("balanced", action, LINK | {"name": name}, PAGE)["approval_required"]
+            is approval_required
+        )
+        assert decide("strict", action, LINK | {"name": name}, PAGE)["approval_required"]
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        "/logout",
+        "/delete?id=1",
+        "/구매/123",
+        "/%EA%B5%AC%EB%A7%A4/123",
+        "/order-구매_123",
+        "/구매.html",
+        "/보안/123",
+    ],
+)
+def test_balanced_plain_link_href_deny_segments(path):
+    assert decide(
+        "balanced", {"type": "click"}, LINK | {"href": "https://example.com" + path}, PAGE
+    )["approval_required"]
+
+
+@pytest.mark.parametrize(
+    "href",
+    [
+        "https://search.naver.com/search.naver?query=%EA%B5%AC%EB%A7%A4",
+        "https://example.com/구매내역/123",
+        "https://example.com/?query=삭제",
+        "https://example.com/등록일순",
+        "https://example.com/#구매",
+    ],
+)
+def test_balanced_plain_link_href_cjk_queries_and_substrings_are_navigation(href):
+    assert not decide("balanced", {"type": "click"}, LINK | {"href": href}, PAGE)[
+        "approval_required"
+    ]
+
+
+@pytest.mark.parametrize(
+    "meta,action",
+    [
+        (LINK | {"tag": "button", "name": "자유게시판 등록"}, {"type": "click"}),
+        (LINK | {"name": "자유게시판", "role": "button"}, {"type": "click"}),
+        (LINK | {"name": "자유게시판", "form_action": PAGE}, {"type": "click"}),
+        (LINK | {"name": "자유게시판", "submits_form": True}, {"type": "click"}),
+        (LINK | {"name": "자유게시판", "download": True}, {"type": "click"}),
+        (LINK | {"name": "자유게시판", "link_ping": True}, {"type": "click"}),
+        (LINK | {"name": "자유게시판"}, {"type": "keypress", "keys": ["ENTER"]}),
+        (LINK | {"tag": "input", "type": "text", "name": "자유게시판"}, {"type": "fill"}),
+        (LINK | {"name": "자유게시판", "href": "javascript:void(0)"}, {"type": "click"}),
+    ],
+)
+def test_cjk_link_exception_does_not_change_other_paths(meta, action):
+    assert decide("balanced", action, meta, PAGE)["approval_required"]
+
+
 @pytest.mark.parametrize("typ", ["scroll", "scroll_at", "move_to"])
 @pytest.mark.parametrize("mode", ["strict", "balanced"])
 def test_passive_actions_preserved(typ, mode):

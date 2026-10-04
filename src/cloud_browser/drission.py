@@ -24,6 +24,7 @@ from .capture_budget import DeadlineTab
 from .capture_consistency import changed as capture_changed
 from .capture_consistency import may_retry as capture_may_retry
 from .config import Settings
+from .error_policy import PAGE_LIMIT_MESSAGE
 from .events import Events
 from .image_privacy import mask_frames
 from .input_driver import NativeInput
@@ -1131,8 +1132,7 @@ class DrissionAdapter:
         if data.get("privacy_incomplete"):
             raise BrowserError(
                 "PRIVACY_INSPECTION_INCOMPLETE",
-                "Privacy inspection reached its bounded work limit; narrow the page or use private control",
-                "blocked",
+                PAGE_LIMIT_MESSAGE,
             )
         if data["protected"]:
             raise BrowserError(
@@ -1365,7 +1365,7 @@ class DrissionAdapter:
         entry = None
         if operation == "goto":
             if not url:
-                raise BrowserError("INVALID_URL", "goto requires a URL")
+                raise BrowserError("INVALID_URL", "goto requires a URL", reason="missing")
             self._validate_url(url)
             command, arguments = "Page.navigate", {"url": url}
         elif operation in ("back", "forward"):
@@ -1761,7 +1761,10 @@ class DrissionAdapter:
             elif not region.get("mask_safe", False):
                 # Transformed/reflected content can paint beyond its rectangle.
                 raise BrowserError(
-                    "SENSITIVE_SCREEN", "Protected content has unbounded compositing", "blocked"
+                    "SENSITIVE_SCREEN",
+                    "Protected content has unbounded compositing",
+                    "blocked",
+                    reason="mask_unbounded",
                 )
         return result
 
@@ -1884,7 +1887,18 @@ class DrissionAdapter:
             or data.get("privacy_mask_unsafe")
         ):
             raise BrowserError(
-                "SENSITIVE_SCREEN", "Cannot safely capture embedded or sensitive content", "blocked"
+                "SENSITIVE_SCREEN",
+                "Cannot safely capture embedded or sensitive content",
+                "blocked",
+                reason=(
+                    "secret_text"
+                    if TOKEN.search(data["text"])
+                    else "iframe_policy"
+                    if data["has_iframe"] and self.cfg.iframe_screenshot_policy == "block"
+                    else "privacy_incomplete"
+                    if data.get("privacy_incomplete")
+                    else "mask_unsafe"
+                ),
             )
         height = data["height"] if full_page else data["viewport"]["height"]
         width = data["viewport"]["width"]
@@ -1907,6 +1921,7 @@ class DrissionAdapter:
                 "SENSITIVE_SCREEN",
                 "Protected content cannot be safely bounded for masking",
                 "blocked",
+                reason="too_many_regions" if len(regions) > 100 else "mask_unsafe",
             )
         self._capture_admission(width, height)
         capture = (
@@ -2270,6 +2285,7 @@ class DrissionAdapter:
                         "SENSITIVE_SCREEN",
                         "Cannot act on masked embedded content; use handoff",
                         "blocked",
+                        reason="iframe_policy",
                     )
             resolved = []
             if action["type"] in ("click_at", "double_click_at"):

@@ -10,22 +10,35 @@ import unicodedata
 from urllib.parse import unquote, urlsplit
 
 PASSIVE_ACTIONS = frozenset({"scroll", "scroll_at", "move_to"})
-_EFFECT = re.compile(
+_EFFECT_EN = (
     r"\b(?:delete|remove|erase|destroy|purchase|buy|pay|payment|checkout|submit|send|publish|"
     r"save|update|upload|grant|revoke|subscribe|unsubscribe|logout|reset|transfer|confirm|"
-    r"accept|agree|consent)\b|\b(?:log|sign)[\s_/-]*out\b|"
-    r"삭제|구매|결제|주문|전송|발송|게시|등록|저장|변경|업로드|허용|권한|동의|구독|해지|탈퇴|로그아웃|초기화|확정|승인|"
-    r"削除|購入|注文|送信|投稿|保存|更新|許可|権限|同意|登録|解約|退会",
-    re.IGNORECASE,
+    r"accept|agree|consent)\b|\b(?:log|sign)[\s_/-]*out\b"
 )
+_EFFECT_CJK = (
+    "삭제|구매|결제|주문|전송|발송|게시|등록|저장|변경|업로드|허용|권한|동의|구독|해지|탈퇴|로그아웃|초기화|확정|승인|"
+    "削除|購入|注文|送信|投稿|保存|更新|許可|権限|同意|登録|解約|退会"
+)
+_EFFECT = re.compile(_EFFECT_EN + "|" + _EFFECT_CJK, re.IGNORECASE)
+_LINK_EFFECT_EN = re.compile(_EFFECT_EN, re.IGNORECASE)
 _FOCUS_KEYS = frozenset({"TAB", "ESCAPE"})
 _EDIT_KEYS = frozenset(
     {"ARROWUP", "ARROWDOWN", "ARROWLEFT", "ARROWRIGHT", "HOME", "END", "BACKSPACE", "DELETE"}
 )
-_PRIVILEGED = re.compile(
-    r"password|otp|auth.?code|permission|access control|enable access|administrator|credit.?card|api.?key|권한|보안|비밀번호|인증|관리자|カード|権限",
-    re.I,
+_PRIVILEGED_EN = r"password|otp|auth.?code|permission|access control|enable access|administrator|credit.?card|api.?key"
+_PRIVILEGED_CJK = "권한|보안|비밀번호|인증|관리자|カード|権限"
+_PRIVILEGED = re.compile(_PRIVILEGED_EN + "|" + _PRIVILEGED_CJK, re.I)
+_LINK_PRIVILEGED_EN = re.compile(_PRIVILEGED_EN, re.I)
+_LINK_ENDINGS = ("하기", "하다", "합니다", "하세요", "해요", "완료")
+_LINK_EFFECT_WORDS = frozenset(_EFFECT_CJK.split("|"))
+_LINK_PRIVILEGED_WORDS = frozenset(_PRIVILEGED_CJK.split("|"))
+_LINK_EFFECT_TOKENS = frozenset(
+    word + ending for word in _LINK_EFFECT_WORDS for ending in _LINK_ENDINGS
 )
+_LINK_PRIVILEGED_TOKENS = frozenset(
+    word + ending for word in _LINK_PRIVILEGED_WORDS for ending in _LINK_ENDINGS
+)
+_LINK_PATH_WORDS = frozenset((_EFFECT_CJK + "|" + _PRIVILEGED_CJK).split("|"))
 _LOCAL_TOOLS = frozenset(
     {
         "selection",
@@ -71,11 +84,40 @@ _SENSITIVE_UI = re.compile(
 )
 
 
-def _effect(value):
+def _decoded(value):
     text = unicodedata.normalize("NFKC", str(value or ""))[:8192]
     for _ in range(3):
         text = unquote(text)
-    return bool(_EFFECT.search(text.replace("_", " ")))
+    return text
+
+
+def _effect(value):
+    return bool(_EFFECT.search(_decoded(value).replace("_", " ")))
+
+
+def _link_name(value, *, privileged=False):
+    text = _decoded(value)
+    english = _LINK_PRIVILEGED_EN if privileged else _LINK_EFFECT_EN
+    if english.search(str(value or "") if privileged else text.replace("_", " ")):
+        return True
+    tokens = "".join(
+        " " if c.isspace() or unicodedata.category(c).startswith("P") else c for c in text
+    ).split()
+    denied = _LINK_PRIVILEGED_TOKENS if privileged else _LINK_EFFECT_TOKENS
+    bare_words = _LINK_PRIVILEGED_WORDS if privileged else _LINK_EFFECT_WORDS
+    return any(
+        token in denied or (token in bare_words and (len(tokens) <= 2 or index == len(tokens) - 1))
+        for index, token in enumerate(tokens)
+    )
+
+
+def _link_href(value):
+    text = _decoded(value)
+    if _LINK_EFFECT_EN.search(text.replace("_", " ")):
+        return True
+    # Decode after URL parsing so escaped '?' in a path cannot become a query.
+    path = _decoded(urlsplit(value).path)
+    return any(segment in _LINK_PATH_WORDS for segment in re.split(r"[/_.-]", path))
 
 
 def _http(value):
@@ -118,9 +160,24 @@ def decide(policy, action, meta=None, page_url=""):
     modifiers = set(action.get("modifiers", []))
     if key in _FOCUS_KEYS and not modifiers - {"SHIFT"}:
         return result(False, "focus_or_escape")
-    if _effect(meta.get("name")) or meta.get("download") or meta.get("link_ping"):
+    plain_link = bool(
+        typ in ("click", "double_click")
+        and meta.get("tag") == "a"
+        and meta.get("role") != "button"
+        and _http(meta.get("href"))
+        and not meta.get("download")
+        and not meta.get("link_ping")
+        and not meta.get("submits_form")
+        and not meta.get("form_action")
+    )
+    name_effect = _link_name(meta.get("name")) if plain_link else _effect(meta.get("name"))
+    if name_effect or meta.get("download") or meta.get("link_ping"):
         return result(True, "effect_or_transfer_indicator")
-    if _PRIVILEGED.search(str(meta.get("name", ""))):
+    if (
+        _link_name(meta.get("name"), privileged=True)
+        if plain_link
+        else _PRIVILEGED.search(str(meta.get("name", "")))
+    ):
         return result(True, "sensitive_or_permission_control")
     editable = not meta.get("readonly") and (
         meta.get("editable")
@@ -190,7 +247,11 @@ def decide(policy, action, meta=None, page_url=""):
     if meta.get("submits_form"):
         return result(not search_form, "get_search_submit" if search_form else "form_submission")
     if meta.get("href"):
-        if meta.get("tag") != "a" or not _http(meta["href"]) or _effect(meta["href"]):
+        if (
+            meta.get("tag") != "a"
+            or not _http(meta["href"])
+            or (_link_href(meta["href"]) if plain_link else _effect(meta["href"]))
+        ):
             return result(True, "unclassified_or_effectful_link")
         return result(False, "http_navigation")
     if meta.get("view_control") in ("popup",) or meta.get("local_ui"):
