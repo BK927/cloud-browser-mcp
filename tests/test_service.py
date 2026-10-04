@@ -1,6 +1,8 @@
 import asyncio
 import time
 
+import pytest
+
 from cloud_browser.service import BrowserService
 
 
@@ -20,6 +22,39 @@ async def proposed(service, sid, tid):
     result = await service.call("act", **args)
     assert result["status"] == "confirmation_required", result
     return args, result["confirmation"]["confirmation_token"]
+
+
+async def test_fill_ordinary_product_slug_is_not_sensitive_input(service):
+    sid, tid = await opened(service)
+    args = dict(
+        session_id=sid,
+        tab_id=tid,
+        expected_revision=1,
+        action={
+            "type": "fill",
+            "node_id": "node_1",
+            "text": "standing-desk-converter-for-home-office",
+        },
+    )
+    proposed = await service.call("act", **args)
+    assert proposed["status"] == "confirmation_required", proposed
+    await service.approve(next(iter(service.pending)), True)
+    result = await service.call(
+        "act", **args, confirmation_token=proposed["confirmation"]["confirmation_token"]
+    )
+    assert result["status"] == "ok", result
+    assert service.worker.executions == 1
+    assert service.worker.calls[-1][1]["action"] == args["action"]
+
+
+@pytest.mark.parametrize("language,timezone", [(None, None), ("ko-KR", "Asia/Seoul")])
+async def test_status_reports_operator_browser_locale(service, language, timezone):
+    service.cfg.browser_language = language
+    service.cfg.browser_timezone = timezone
+    result = await service.call("status")
+    assert result["status"] == "ok", result
+    assert result["capabilities"]["browser_language"] == language
+    assert result["capabilities"]["browser_timezone"] == timezone
 
 
 async def test_approval_is_human_gated_and_single_use(service):

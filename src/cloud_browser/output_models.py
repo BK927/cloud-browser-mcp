@@ -404,6 +404,8 @@ class Capabilities(OutputModel):
     clipboard: str
     artifacts: str
     installation: str
+    browser_language: str | None = None
+    browser_timezone: str | None = None
     navigation_default_timeout_ms: int | None = None
     navigation_max_timeout_ms: int | None = None
     navigation_progress: str | None = None

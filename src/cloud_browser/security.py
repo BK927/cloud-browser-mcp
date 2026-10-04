@@ -31,7 +31,10 @@ SENSITIVE = re.compile(
     re.I,
 )
 TOKEN = re.compile(
-    r"(?:Bearer\s+\S+|eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+|(?:sk-|ghp_|github_pat_)[A-Za-z0-9_-]{15,})"
+    r"(?<![A-Za-z0-9_-])(?:"
+    r"Bearer\s+(?=[A-Za-z0-9._~+/=-]*[0-9])[A-Za-z0-9._~+/=-]{20,}"
+    r"|eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+"
+    r"|(?:sk-|ghp_|github_pat_)(?=[A-Za-z0-9_-]*[0-9])[A-Za-z0-9_-]{20,})"
 )
 SECRET_ASSIGNMENT = re.compile(
     r"(?i)[\"']?\b(password|passwd|otp|authorization|cookie|api[_ -]?key|access[_ -]?token|refresh[_ -]?token|secret)[\"']?\s*[:=]\s*(?:\"(?:\\.|[^\"\\])*\"|'(?:\\.|[^'\\])*'|[^\s,;<>{}\[\]]+)"

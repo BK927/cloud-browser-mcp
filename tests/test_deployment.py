@@ -1,6 +1,7 @@
 import hashlib
 import json
 from pathlib import Path
+from zoneinfo import ZoneInfoNotFoundError
 
 import pytest
 import yaml
@@ -125,3 +126,113 @@ def test_callback_wildcard_and_same_origin_are_rejected():
 def test_callback_requires_concrete_safe_https_url(callback):
     with pytest.raises(ValidationError):
         Settings(_env_file=None, development=True, oauth_redirect_uris=[callback])
+
+
+def test_browser_locale_defaults_are_unset():
+    cfg = Settings(_env_file=None, _env_prefix="LOCALE_TEST_", development=True)
+    assert cfg.browser_language is None
+    assert cfg.browser_accept_language is None
+    assert cfg.browser_timezone is None
+
+
+@pytest.mark.parametrize("language", ["ko-KR", "en", "eng", "zh-Hant-TW", "es-419"])
+def test_browser_language_derives_accept_languages(language):
+    cfg = Settings(_env_file=None, development=True, browser_language=language)
+    assert cfg.browser_language == language
+    assert cfg.browser_accept_language == language + "," + language.split("-")[0]
+
+
+@pytest.mark.parametrize("languages", ["ko-KR,ko,en-US,en", "zh-Hant-TW,zh", "es-419", "en"])
+def test_explicit_browser_accept_languages(languages):
+    cfg = Settings(
+        _env_file=None,
+        development=True,
+        browser_language="ko-KR",
+        browser_accept_language=languages,
+    )
+    assert cfg.browser_accept_language == languages
+
+
+@pytest.mark.parametrize(
+    "language", ["", "KO-kr", "ko-kr", "en_US", "english", "en-US-extra", "en;--flag", "en\n"]
+)
+@pytest.mark.parametrize("field", ["browser_language", "browser_accept_language"])
+def test_browser_locale_rejects_invalid_tags(field, language):
+    with pytest.raises(ValidationError):
+        Settings(_env_file=None, development=True, **{field: language})
+
+
+@pytest.mark.parametrize(
+    "languages", ["en,", "en,,ko", "en, ko", "en-US;q=0.9", ",".join(["en"] * 11)]
+)
+def test_browser_accept_languages_requires_a_short_tag_list(languages):
+    with pytest.raises(ValidationError):
+        Settings(_env_file=None, development=True, browser_accept_language=languages)
+
+
+@pytest.mark.parametrize(
+    "timezone", ["Asia/Seoul", "America/New_York", "America/Argentina/Buenos_Aires"]
+)
+def test_browser_timezone_accepts_known_names(timezone):
+    cfg = Settings(_env_file=None, development=True, browser_timezone=timezone)
+    assert cfg.browser_timezone == timezone
+
+
+def test_browser_timezone_rejects_unknown_names_with_a_database(monkeypatch):
+    def zone(name):
+        if name not in ("UTC", "Asia/Seoul"):
+            raise ZoneInfoNotFoundError(name)
+        return object()
+
+    monkeypatch.setattr("cloud_browser.config.ZoneInfo", zone)
+    assert (
+        Settings(_env_file=None, development=True, browser_timezone="UTC").browser_timezone == "UTC"
+    )
+    with pytest.raises(ValidationError, match="Unknown browser timezone"):
+        Settings(_env_file=None, development=True, browser_timezone="Unknown/Nowhere")
+
+
+@pytest.mark.parametrize(
+    "timezone", ["Asia/Seoul", "America/New_York", "America/Argentina/Buenos_Aires", "Etc/GMT+9"]
+)
+def test_browser_timezone_without_a_database_uses_strict_names(monkeypatch, timezone):
+    def missing(name):
+        raise ZoneInfoNotFoundError(name)
+
+    monkeypatch.setattr("cloud_browser.config.ZoneInfo", missing)
+    assert (
+        Settings(_env_file=None, development=True, browser_timezone=timezone).browser_timezone
+        == timezone
+    )
+
+
+@pytest.mark.parametrize(
+    "timezone",
+    [
+        "",
+        "Seoul",
+        "../Seoul",
+        "/Asia/Seoul",
+        "Asia/../Seoul",
+        "Asia\\Seoul",
+        "Asia/Seoul;env",
+        "Asia/Seoul\n",
+    ],
+)
+def test_browser_timezone_without_a_database_rejects_unsafe_names(monkeypatch, timezone):
+    def missing(name):
+        raise ZoneInfoNotFoundError(name)
+
+    monkeypatch.setattr("cloud_browser.config.ZoneInfo", missing)
+    with pytest.raises(ValidationError):
+        Settings(_env_file=None, development=True, browser_timezone=timezone)
+
+
+def test_operator_browser_locale_environment(monkeypatch):
+    monkeypatch.setenv("CB_BROWSER_LANGUAGE", "ko-KR")
+    monkeypatch.setenv("CB_BROWSER_ACCEPT_LANGUAGE", "ko-KR,ko,en-US,en")
+    monkeypatch.setenv("CB_BROWSER_TIMEZONE", "Asia/Seoul")
+    cfg = Settings(_env_file=None, development=True)
+    assert cfg.browser_language == "ko-KR"
+    assert cfg.browser_accept_language == "ko-KR,ko,en-US,en"
+    assert cfg.browser_timezone == "Asia/Seoul"

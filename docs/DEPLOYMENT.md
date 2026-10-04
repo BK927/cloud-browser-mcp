@@ -35,6 +35,13 @@ Argon2 해시의 `$`가 변형되지 않도록 `.env` 예시처럼 작은따옴�
 `.env`에는 실제 public/control origin, 정확한 callback, client ID를 지정합니다.
 `CB_ADMIN_PASSWORD_HASH`의 예시 문구 그대로 배포하면 로그인할 수 없습니다.
 
+`CB_BROWSER_LANGUAGE`(예: `ko-KR`), `CB_BROWSER_ACCEPT_LANGUAGE`(예:
+`ko-KR,ko,en-US,en`), `CB_BROWSER_TIMEZONE`(예: `Asia/Seoul`)은 집 서버의 실제
+언어·시간대에 맞추는 운영자 설정이며 AI 클라이언트가 변경할 수 없습니다. 언어만
+지정하면 수락 언어 목록은 `ko-KR,ko`처럼 자동 구성됩니다. 미설정 시 기존 동작을
+유지하며, 봇 차단을 피하기 위한 위장 설정이 아닙니다. 시간대는 sudo 환경 변수
+제한의 영향을 받지 않도록 Chromium의 각 관리 탭에 CDP로 적용합니다.
+
 Python 설치를 원하지 않으면 이미지를 먼저 빌드하고 임시 컨테이너의 CLI만 실행할 수
 있습니다. 이 명령은 브라우저나 공개 리스너를 시작하지 않습니다.
 

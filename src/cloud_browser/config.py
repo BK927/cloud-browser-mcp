@@ -2,11 +2,14 @@ import re
 from pathlib import Path
 from typing import Literal
 from urllib.parse import urlsplit
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-from pydantic import Field, model_validator
+from pydantic import Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from .authentication import AuthRule
+
+LANGUAGE_TAG = re.compile(r"[a-z]{2,3}(?:-[A-Z][a-z]{3})?(?:-(?:[A-Z]{2}|[0-9]{3}))?")
 
 
 class Settings(BaseSettings):
@@ -71,6 +74,9 @@ class Settings(BaseSettings):
     upload_ttl: int = Field(600, ge=60, le=3600)
     chromium_path: str = "/usr/bin/chromium"
     browser_proxy: str = "http://egress:3128"
+    browser_language: str | None = None
+    browser_accept_language: str | None = Field(None, max_length=256)
+    browser_timezone: str | None = Field(None, max_length=128)
     headless: bool = False
     # Inspect ordinary frames; mask sensitive/uninspectable regions. The legacy
     # stronger block/all-mask operator choices remain available.
@@ -80,8 +86,41 @@ class Settings(BaseSettings):
     # Off by default: deploying the MCP never implicitly enables remote desktop.
     manual_control_enabled: bool = False
 
+    @field_validator("browser_language", "browser_accept_language")
+    @classmethod
+    def valid_browser_languages(cls, value, info):
+        if value is None:
+            return value
+        tags = value.split(",") if info.field_name == "browser_accept_language" else [value]
+        if len(tags) > 10 or any(not LANGUAGE_TAG.fullmatch(tag) for tag in tags):
+            raise ValueError("Browser languages must be BCP-47 tags (at most 10 in the list)")
+        return value
+
+    @field_validator("browser_timezone")
+    @classmethod
+    def valid_browser_timezone(cls, value):
+        if value is None:
+            return value
+        try:
+            ZoneInfo(value)
+        except ZoneInfoNotFoundError:
+            try:
+                ZoneInfo("UTC")
+            except ZoneInfoNotFoundError:
+                # Windows development may have neither system tzdata nor the
+                # Python tzdata package. Chromium still has its own zone database.
+                if re.fullmatch(r"[A-Za-z_]+(?:/[A-Za-z][A-Za-z0-9_+-]*){1,2}", value):
+                    return value
+                raise ValueError("Browser timezone must be an Area/Location name") from None
+            raise ValueError("Unknown browser timezone") from None
+        return value
+
     @model_validator(mode="after")
     def safe_deployment(self):
+        if self.browser_accept_language is None and self.browser_language is not None:
+            self.browser_accept_language = (
+                self.browser_language + "," + self.browser_language.split("-")[0]
+            )
         if self.navigation_timeout > self.navigation_max_timeout:
             raise ValueError("Default navigation timeout exceeds the operator ceiling")
         if self.grant_max_ttl < self.refresh_ttl:

@@ -312,7 +312,7 @@ def create_apps(settings: Settings, *, worker=None):
     async def browser_status(
         session_id: str | None = None, lease_id: str | None = None, operation_id: str | None = None
     ) -> Annotated[CallToolResult, StatusOutput]:
-        """Read memory headroom, sessions, tabs and human-control/authentication progress."""
+        """Read memory, sessions/tabs, control/auth progress and locale."""
         return await run(
             "status", session_id=session_id, lease_id=lease_id, operation_id=operation_id
         )

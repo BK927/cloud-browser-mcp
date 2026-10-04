@@ -153,6 +153,12 @@ class DrissionAdapter:
                 # DrissionPage enables synthetic focus on every tab by default.
                 # Preserve real selection/visibility for the shared human browser.
                 tab.run_cdp("Emulation.setFocusEmulationEnabled", enabled=False)
+                if self.cfg.browser_timezone is not None:
+                    # Apply to every discovered target, including new tabs/popups,
+                    # without relying on environment variables surviving sudo.
+                    tab.run_cdp(
+                        "Emulation.setTimezoneOverride", timezoneId=self.cfg.browser_timezone
+                    )
                 self._viewport(state)
 
                 if not session.get("paused"):
@@ -1144,6 +1150,10 @@ class DrissionAdapter:
             ).set_user_data_path(str(profile))
             options.set_timeouts(base=5, page_load=20, script=5).set_retry(times=0)
             options.headless(self.cfg.headless)
+            if self.cfg.browser_language is not None:
+                options.set_argument("--lang", self.cfg.browser_language)
+            if self.cfg.browser_accept_language is not None:
+                options.set_pref("intl.accept_languages", self.cfg.browser_accept_language)
             options.set_argument("--window-size=1024,768")
             options.set_argument("--disable-quic")
             options.set_argument("--no-first-run")

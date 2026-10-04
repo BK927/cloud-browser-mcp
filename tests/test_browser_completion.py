@@ -112,7 +112,7 @@ def test_post_dispatch_observation_failure_is_uncertain(browser, monkeypatch):
 
 def test_secret_option_metadata_is_redacted_recursively(browser):
     adapter, sid, tid, _ = browser
-    secret = "ghp_" + "a" * 24
+    secret = "ghp_" + "a1" * 18
     adapter._tab(sid, tid).tab.run_js(
         """
         document.body.innerHTML = '<select aria-label="Choice"><option value="' + arguments[0] + '">Item</option></select>';

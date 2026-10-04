@@ -1617,6 +1617,8 @@ class BrowserService:
             "manual_control_scope": "isolated-display-global-dispatch-pause",
             "operation_results": "operation_id-and-browser_status",
             "image_content": True,
+            "browser_language": self.cfg.browser_language,
+            "browser_timezone": self.cfg.browser_timezone,
             "observation_format": "rendered-main-v1",
             "accessibility": "chromium-ax-with-dom-fallback",
             "targeted_query": "bounded-semantic-targets-v1",

@@ -354,6 +354,22 @@ async def test_validation_rejects_wrong_nested_types(registered):
         Draft202012Validator(schema).validate(payload)
 
 
+@pytest.mark.parametrize("language,timezone", [(None, None), ("ko-KR", "Asia/Seoul")])
+async def test_status_schema_declares_browser_locale(registered, service, language, timezone):
+    service.cfg.browser_language = language
+    service.cfg.browser_timezone = timezone
+    capabilities = service._capabilities()
+    schema = next(
+        t.output_schema for t in await registered[0].list_tools() if t.name == "browser_status"
+    )
+    for field in ("browser_language", "browser_timezone"):
+        assert schema["$defs"]["Capabilities"]["properties"][field]["type"] == ["string", "null"]
+    await invoke(registered, "status", {}, response(capabilities=capabilities))
+    capabilities["browser_timezone"] = 123
+    with pytest.raises(ValidationError):
+        Draft202012Validator(schema).validate(response(capabilities=capabilities))
+
+
 @pytest.mark.parametrize("field,value", [("revision", "1"), ("truncated", "false")])
 async def test_sdk_rejects_coercible_values_without_rewriting_results(registered, field, value):
     payload = response(revision=1, observation=copy.deepcopy(OBSERVATION))
