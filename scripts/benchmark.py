@@ -23,6 +23,15 @@ from cloud_browser.config import Settings
 from cloud_browser.oauth import Auth
 from cloud_browser.store import Store
 
+try:
+    from cloud_browser.client_progress import finish_navigation
+except ModuleNotFoundError as exc:
+    if exc.name != "cloud_browser.client_progress":
+        raise
+    # Copy the byte-identical helper beside this harness for old baselines;
+    # do not patch their installed browser/server package.
+    from client_progress import finish_navigation
+
 
 def running_settings():
     """docker exec does not inherit entrypoint exports; read the same-UID API.
@@ -82,7 +91,7 @@ async def benchmark(args):
                     await client.initialize()
 
                     async def invoke(name, parameters):
-                        nonlocal lease_id
+                        nonlocal lease_id, sid
                         if lease_id and parameters.get("session_id"):
                             parameters = parameters | {"lease_id": lease_id}
                         start = time.perf_counter()
@@ -94,6 +103,15 @@ async def benchmark(args):
                         }
                         if value and value.get("lease_id"):
                             lease_id = value["lease_id"]
+                            sid = value["session_id"]  # retain partial-open cleanup authority
+                        initial_ms = round((time.perf_counter() - start) * 1000)
+                        if name in ("browser_open", "browser_navigate"):
+
+                            async def poll(identity):
+                                progress = await client.call_tool("browser_status", identity)
+                                return progress.structured_content or {}
+
+                            value = await finish_navigation(value, poll)
                         records.append(
                             {
                                 "tool": name,
@@ -101,6 +119,7 @@ async def benchmark(args):
                                 "started_at": started_at,
                                 "finished_at": time.time(),
                                 "elapsed_ms": round((time.perf_counter() - start) * 1000),
+                                "initial_response_ms": initial_ms,
                                 "status": value.get("status"),
                                 "error": (value.get("error") or {}).get("code"),
                                 "image_base64_bytes": sum(

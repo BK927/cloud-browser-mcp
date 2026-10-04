@@ -71,6 +71,12 @@ async def test_background_reaper_and_owned_expired_close(service):
                 break
             await asyncio.sleep(0.01)
         assert not service.sessions
+        # The explicit-close check is independent of the reaper check above.
+        # Stop it before expiring the second work; either contender may otherwise
+        # legitimately remove the session first on a slower/shared test runner.
+        service.sweeper.cancel()
+        await asyncio.gather(service.sweeper, return_exceptions=True)
+        service.sweeper = None
         second = await service.call("open", _principal="connection")
         service.sessions[second["session_id"]]["expires"] = 0
         result = await service.call("close", **own(second), scope="session")

@@ -1,4 +1,5 @@
 import socket
+from urllib.parse import parse_qs, urlencode, urlsplit
 
 import pytest
 from pydantic import TypeAdapter, ValidationError
@@ -36,6 +37,38 @@ def test_dns_mixed_public_private_is_denied(monkeypatch):
 def test_urls_hide_credentials_query_and_fragment():
     result = safe_url("https://user:password@example.com/a?code=12345&x=secret#token")
     assert not any(secret in result for secret in ("password", "12345", "secret", "#token", "user"))
+
+
+@pytest.mark.parametrize("path", ["/board/view/", "/mgallery/board/view/", "/mini/board/view/"])
+@pytest.mark.parametrize("article", ["2940536", "123456789012"])
+def test_dc_public_article_number_remains_navigable(path, article):
+    url = f"https://gall.dcinside.com{path}?id=programming&no={article}#view"
+    assert safe_url(url) == url
+
+
+@pytest.mark.parametrize(
+    "base",
+    [
+        "http://gall.dcinside.com/board/view/",
+        "https://gall.dcinside.com:8443/board/view/",
+        "https://other.example/board/view/",
+        "https://gall.dcinside.com.attacker.example/board/view/",
+        "https://gall.dcinside.com/member/login/",
+        "https://gall.dcinside.com/board/view",
+    ],
+)
+def test_dc_article_exception_is_origin_and_path_bound(base):
+    cleaned = safe_url(base + "?id=programming&no=2940536&access_token=private-token")
+    query = parse_qs(urlsplit(cleaned).query)
+    assert query["no"] == ["[REDACTED]"]
+    assert query["access_token"] == ["[REDACTED]"]
+    assert "private-token" not in cleaned
+
+
+@pytest.mark.parametrize("value", ["", "1234567890123", "-3", "+3", "3.0", "abc", "１２３"])
+def test_dc_article_exception_rejects_unbounded_or_non_decimal_values(value):
+    cleaned = safe_url("https://gall.dcinside.com/board/view/?" + urlencode({"no": value}))
+    assert parse_qs(urlsplit(cleaned).query)["no"] == ["[REDACTED]"]
 
 
 def test_action_schema_rejects_unadvertised_actions_and_extra_keys():

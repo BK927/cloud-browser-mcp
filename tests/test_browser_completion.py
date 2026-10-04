@@ -77,7 +77,14 @@ def test_challenge_blocks_action_even_without_observe(browser, text, code):
     adapter, sid, tid, _ = browser
     obs, button = node(adapter, sid, tid, "Personal Information")
     adapter._tab(sid, tid).tab.run_js(
-        "document.body.insertAdjacentHTML('afterbegin', '<p>' + arguments[0] + '</p>')", text
+        """
+        const evidence = arguments[1] === 'CAPTCHA_REQUIRED'
+          ? '<form><p>' + arguments[0] + '</p><input id="captcha-answer"></form>'
+          : '<div role="alert">' + arguments[0] + '</div>';
+        document.body.insertAdjacentHTML('afterbegin', evidence);
+        """,
+        text,
+        code,
     )
     with pytest.raises(BrowserError) as exc:
         adapter.prepare(sid, tid, obs["revision"], {"type": "click", "node_id": button["node_id"]})
@@ -121,7 +128,7 @@ def test_auth_resume_refuses_still_sensitive_screen(browser):
     adapter.focus(sid, tid)
     adapter._tab(sid, tid).tab.run_js('document.body.innerHTML = "<input type=password>"')
     with pytest.raises(BrowserError) as exc:
-        adapter.resume(sid, tid)
+        adapter.resume(sid, tid, auth_origin=browser[3])
     assert exc.value.code == "AUTH_REQUIRED"
 
 

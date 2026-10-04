@@ -24,7 +24,7 @@ pytestmark = pytest.mark.browser
 
 
 @pytest.fixture
-def oauth_browser(cfg, tmp_path, request):
+def oauth_browser(cfg, tmp_path, request, monkeypatch):
     executable = os.getenv("CB_TEST_CHROMIUM")
     if not executable:
         pytest.skip("Set CB_TEST_CHROMIUM for real OAuth browser checks")
@@ -65,6 +65,19 @@ def oauth_browser(cfg, tmp_path, request):
     # exact HTTPS callbacks; this tests browser CSP, not TLS or deployment isolation.
     cfg.oauth_redirect_uris = [callback]
     public, control, service, auth = create_apps(cfg, worker=FakeWorker())
+    # This fixture exercises OAuth/console browser forms against a fake worker,
+    # not resource admission. Other applications' memory usage must not turn a
+    # form/CSRF regression into an unrelated RESOURCE_PRESSURE setup failure.
+    monkeypatch.setattr(
+        service,
+        "resources",
+        lambda admission=0: {
+            "available_mb": 4096,
+            "host_available_mb": 4096,
+            "can_admit": True,
+            "memory_pressure": {"some": 0, "full": 0},
+        },
+    )
     mode = getattr(request, "param", "current")
     diagnostics = {"post_statuses": [], "form_action_errors": [], "private_posts": []}
 
@@ -79,8 +92,6 @@ def oauth_browser(cfg, tmp_path, request):
             action={"type": "click", "node_id": "node_1"},
         )
         assert proposal["status"] == "confirmation_required"
-        handoff = await service.call("handoff", **target, reason="Local form regression")
-        assert handoff["status"] == "user_action_required"
         return target, proposal["confirmation"]["confirmation_token"]
 
     target, approval_token = asyncio.run(seed_control())
@@ -349,6 +360,15 @@ def test_real_console_login_approval_and_handback_forms(oauth_browser):
     assert case.auth.store.get("approval", case.approval_token)["state"] == "approved"
     assert case.diagnostics["private_posts"][-1] == ("approval", 303, True)
     assert case.service.worker.executions == 0  # Approval is not execution.
+    # Private control invalidates the previous consent. Test the two forms in
+    # real workflow order, rather than seeding an impossible pending approval
+    # for a work already under manual control.
+    handoff = asyncio.run(
+        case.service.call("handoff", **case.target, reason="Local form regression")
+    )
+    assert handoff["status"] == "user_action_required"
+    assert case.auth.store.get("approval", case.approval_token) is None
+    tab.get(cfg.control_origin + "/")
     submit("css:form[action$='/complete'] button")
     assert tab.ele("css:h1").text == "Control returned"
     lease = case.service.leases[case.target["session_id"]]

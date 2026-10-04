@@ -31,13 +31,17 @@ async def echo(reader, writer):
         await writer.wait_closed()
 
 
-@pytest.mark.parametrize("payload", [
-    b"GET /mcp HTTP/1.1\r\nHost: attacker.example\r\n\r\n",
-    b"CONNECT 169.254.169.254:80 HTTP/1.1\r\nHost: metadata\r\n\r\n",
-    b"HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\n\r\n\x82\x03\x00\xff\x01",
-    b"event: message\ndata: {\"opaque\":true}\n\n",
-    bytes(range(256)) * 4096,
-], ids=["http", "connect-not-a-proxy", "websocket", "sse", "one-megabyte"])
+@pytest.mark.parametrize(
+    "payload",
+    [
+        b"GET /mcp HTTP/1.1\r\nHost: attacker.example\r\n\r\n",
+        b"CONNECT 169.254.169.254:80 HTTP/1.1\r\nHost: metadata\r\n\r\n",
+        b"HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\n\r\n\x82\x03\x00\xff\x01",
+        b'event: message\ndata: {"opaque":true}\n\n',
+        bytes(range(256)) * 4096,
+    ],
+    ids=["http", "connect-not-a-proxy", "websocket", "sse", "one-megabyte"],
+)
 async def test_relay_is_fixed_destination_and_byte_transparent(payload):
     async with relay_to(echo) as (port, _), asyncio.timeout(5):
         reader, writer = await asyncio.open_connection("127.0.0.1", port)
@@ -90,18 +94,19 @@ async def test_idle_connection_expires_and_slot_is_reusable():
 
 
 async def test_one_way_server_activity_refreshes_idle_deadline():
+    # Stream duration exceeds the idle budget, but permits scheduling jitter.
     async def events(reader, writer):
         try:
-            for _ in range(8):
+            for _ in range(12):
                 writer.write(b"event\n")
                 await writer.drain()
-                await asyncio.sleep(0.03)
+                await asyncio.sleep(0.1)
         finally:
             writer.close()
 
-    async with relay_to(events, idle_timeout=0.1) as (port, _), asyncio.timeout(3):
+    async with relay_to(events, idle_timeout=0.5) as (port, _), asyncio.timeout(5):
         reader, writer = await asyncio.open_connection("127.0.0.1", port)
-        assert await reader.read() == b"event\n" * 8
+        assert await reader.read() == b"event\n" * 12
         writer.close()
         await writer.wait_closed()
 

@@ -17,6 +17,18 @@ def _compact_schema(schema: dict[str, Any]) -> None:
         schema.pop("additionalProperties")  # JSON Schema's default; retain false/schema values.
     if schema.get("default", ...) is None:
         schema.pop("default")
+    choices = schema.get("anyOf")
+    if (
+        isinstance(choices, list)
+        and choices
+        and all(
+            isinstance(child, dict) and set(child) == {"type"} and isinstance(child["type"], str)
+            for child in choices
+        )
+    ):
+        # Equivalent JSON Schema type union; keep constraints, refs and enums intact.
+        schema["type"] = list(dict.fromkeys(child["type"] for child in choices))
+        schema.pop("anyOf")
     for keyword in ("properties", "$defs", "patternProperties", "dependentSchemas"):
         for child in schema.get(keyword, {}).values():
             if isinstance(child, dict):
@@ -58,6 +70,11 @@ class Error(OutputModel):
     category: str | None = None
 
 
+class CaptureOmission(Error):
+    capture_reasons: list[str] | None = None
+    capture_attempts: int | None = None
+
+
 class BrowserOutput(OutputModel):
     status: Literal[
         "ok", "no_change", "error", "blocked", "confirmation_required", "user_action_required"
@@ -66,7 +83,7 @@ class BrowserOutput(OutputModel):
     session_id: str | None
     tab_id: str | None
     selected_tab_id: str | None = None
-    revision: int | None = Field(description="Use this revision for the next action.")
+    revision: int | None = Field(description="Revision for actions.")
     page: Page | None
     notices: list[str]
     error: Error | None
@@ -84,15 +101,32 @@ class NavigationDetails(OutputModel):
 
 
 class Navigation(NavigationDetails):
-    operation: Literal["goto", "back", "forward", "reload"]
-    redirected: bool
-    navigation_occurred: bool
+    operation: Literal["goto", "back", "forward", "reload"] | None = None
+    redirected: bool | None = None
+    navigation_occurred: bool | None = None
+    pending: bool | None = Field(None, description="True is NOT load completion.")
+    operation_id: str | None = None
+    phase: (
+        Literal[
+            "command_response",
+            "document_transition",
+            "loading",
+            "final_verification",
+            "completed",
+            "cancelled",
+        ]
+        | None
+    ) = None
+    elapsed_ms: int | None = None
+    timeout_ms: int | None = None
 
 
 class OpenOutput(BrowserOutput):
+    operation_id: str | None = None
     lease_id: str | None = Field(None, description="Keep this work lease for subsequent calls.")
     expires_at: str | None = None
     navigation: Navigation | None = None
+    current_page: Page | None = None
 
 
 class Tab(Page):
@@ -106,7 +140,9 @@ class TabsOutput(BrowserOutput):
 
 
 class NavigateOutput(BrowserOutput):
+    operation_id: str | None = None
     navigation: Navigation | None = None
+    current_page: Page | None = None
 
 
 class Viewport(OutputModel):
@@ -125,6 +161,7 @@ class Screenshot(Viewport):
     full_page: bool
     masked_regions: list[Region]
     captured_at: float
+    capture_attempts: int | None = None
 
 
 class Frame(OutputModel):
@@ -154,6 +191,12 @@ class Observation(OutputModel):
     interactive_page_truncated: bool | None = None
     interactive_truncated: bool | None = None
     query_scan_truncated: bool | None = None
+    query_match_count: int | None = None
+    query_empty_reason: str | None = None
+    protected_regions_omitted: bool | None = None
+    observation_revision: int | None = None
+    pagination_stale: bool | None = None
+    screenshot_omitted: CaptureOmission | None = None
     semantic_source: str | None = None
     semantic_source_truncated: bool | None = None
     accessibility_source: str | None = None
@@ -213,6 +256,9 @@ class Confirmation(OutputModel):
 
 class ActionResult(NavigationDetails):
     performed: bool
+    target_state_verified: bool | None = None
+    typing_semantics: str | None = None
+    selection_events: str | None = None
     page_changed: bool | None = None
     navigation_occurred: bool | None = None
     new_tab_ids: list[str] | None = None
@@ -245,6 +291,7 @@ class Operation(OutputModel):
     result: BrowserOutput | None = Field(
         None, description="Saved original tool response, if completed."
     )
+    navigation: Navigation | None = None
 
 
 class ActOutput(BrowserOutput):
@@ -357,6 +404,10 @@ class Capabilities(OutputModel):
     clipboard: str
     artifacts: str
     installation: str
+    navigation_default_timeout_ms: int | None = None
+    navigation_max_timeout_ms: int | None = None
+    navigation_progress: str | None = None
+    navigation_poll_max_hz: int | None = None
 
 
 class Scheduler(OutputModel):
@@ -382,6 +433,7 @@ class StatusOutput(BrowserOutput):
     capabilities: Capabilities | None = None
     operation: Operation | None = None
     scheduler: Scheduler | None = None
+    navigations: list[Navigation] | None = None
 
 
 class OutputConfiguration(OutputModel):
@@ -390,6 +442,7 @@ class OutputConfiguration(OutputModel):
     screenshot_quality: int
     max_chars: int
     wait_ms: int
+    navigation_timeout_ms: int | None = None
 
 
 class ConfigureOutput(BrowserOutput):

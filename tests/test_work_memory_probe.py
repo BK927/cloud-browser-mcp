@@ -76,6 +76,43 @@ async def test_independent_workloads_cleanup_and_public_safe_report(mode, total)
     )
 
 
+async def test_pending_open_is_polled_not_counted_as_fast_completion():
+    class PendingClient(Client):
+        async def call_tool(self, name, args):
+            if name == "browser_status" and args.get("operation_id"):
+                sid = args["session_id"]
+                assert args["lease_id"] == self.owned[sid]
+                return SimpleNamespace(
+                    structured_content={
+                        "status": "ok",
+                        "operation": {
+                            "state": "completed",
+                            "result": {
+                                "status": "ok",
+                                "session_id": sid,
+                                "lease_id": self.owned[sid],
+                                "tab_id": f"tab_{self.counter}",
+                            },
+                        },
+                    }
+                )
+            raw = await super().call_tool(name, args)
+            if name == "browser_open":
+                raw.structured_content.update(
+                    status="no_change",
+                    tab_id=None,
+                    operation_id=f"operation_{self.counter}",
+                    navigation={"pending": True, "timeout_ms": 60000},
+                )
+            return raw
+
+    client = PendingClient()
+    result = await run(client, "single")
+    assert result["result"] == "completed" and not client.owned and client.counter == 1
+    opened = next(row for row in result["records"] if row.get("phase") == "open_1")
+    assert opened["status"] == "ok" and opened["elapsed_ms"] >= 500
+
+
 @pytest.mark.parametrize(
     "options,reason",
     [({"foreign": 1}, "FOREIGN_OR_UNACCOUNTED_WORK"), ({"limit": 1400}, "BUDGET_MISMATCH")],

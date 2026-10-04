@@ -12,6 +12,7 @@ from mcp import ClientSession
 from mcp.client.streamable_http import streamable_http_client
 from PIL import Image
 
+from cloud_browser.client_progress import finish_navigation
 from cloud_browser.config import Settings
 from cloud_browser.server import create_apps
 
@@ -67,6 +68,12 @@ async def test_actual_streamable_http_sdk_tools_and_image(tmp_path, real_browser
                         "browser_clipboard",
                     }
                     opened = (await client.call_tool("browser_open", {})).structured_content
+
+                    async def poll(identity):
+                        progress = await client.call_tool("browser_status", identity)
+                        return progress.structured_content
+
+                    opened = await finish_navigation(opened, poll)
                     assert opened["status"] == "ok"
                     args = {
                         "session_id": opened["session_id"],

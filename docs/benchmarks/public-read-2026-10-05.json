@@ -1,0 +1,26 @@
+{
+  "environment": "Windows / Python 3.13.11 / DrissionPage 4.1.1.4 / Chrome 154",
+  "scope": "Disposable headless development adapter; not Pi or ChatGPT",
+  "raw_sanitized_sha256": "c428d27e097a7521111d034e2ae587d975faacc975d9ebca57a534bfb31d2518",
+  "overall_ok": false,
+  "pages": [
+    {"round":1,"target":"dc_list","navigation_ms":2813.555,"semantic_ok":true,"auto_ok":true,"visual_ok":true,"visual_ms":350.048,"capture_attempts":1},
+    {"round":1,"target":"dc_article","navigation_ms":2145.227,"semantic_ok":true,"auto_ok":true,"body_chars":287,"visual_ok":false,"visual_ms":489.478,"error":"SCREEN_CHANGED","capture_reasons":["frame_document"],"capture_attempts":1},
+    {"round":1,"target":"youtube_search","navigation_ms":4379.419,"semantic_ok":true,"auto_ok":true,"visual_ok":true,"visual_ms":317.608,"capture_attempts":1},
+    {"round":1,"target":"youtube_video","navigation_ms":4768.209,"semantic_ok":true,"auto_ok":true,"body_chars":138,"visual_ok":true,"visual_ms":860.514,"capture_attempts":1},
+    {"round":2,"target":"dc_list","navigation_ms":2785.446,"semantic_ok":true,"auto_ok":true,"visual_ok":true,"visual_ms":453.318,"capture_attempts":1},
+    {"round":2,"target":"dc_article","navigation_ms":2120.915,"semantic_ok":true,"auto_ok":true,"body_chars":287,"visual_ok":true,"visual_ms":515.303,"capture_attempts":1},
+    {"round":2,"target":"youtube_search","navigation_ms":4712.469,"semantic_ok":true,"auto_ok":true,"visual_ok":true,"visual_ms":480.982,"capture_attempts":1},
+    {"round":2,"target":"youtube_video","navigation_ms":5250.814,"semantic_ok":true,"auto_ok":true,"body_chars":138,"visual_ok":true,"visual_ms":1188.383,"capture_attempts":1},
+    {"round":3,"target":"dc_list","navigation_ms":3004.937,"semantic_ok":true,"auto_ok":true,"visual_ok":true,"visual_ms":392.408,"capture_attempts":1},
+    {"round":3,"target":"dc_article","navigation_ms":2112.667,"semantic_ok":true,"auto_ok":true,"body_chars":287,"visual_ok":false,"visual_ms":566.062,"error":"SCREEN_CHANGED","capture_reasons":["frame_document"],"capture_attempts":1},
+    {"round":3,"target":"youtube_search","navigation_ms":4718.968,"semantic_ok":true,"auto_ok":true,"visual_ok":true,"visual_ms":720.639,"capture_attempts":1},
+    {"round":3,"target":"youtube_video","navigation_ms":6278.364,"semantic_ok":true,"auto_ok":true,"body_chars":138,"visual_ok":true,"visual_ms":808.576,"capture_attempts":1}
+  ],
+  "roundtrips": [
+    {"round":1,"same_article":true,"body_chars":284,"elapsed_ms":2276.472,"preserved_links":13,"sampled_links":13,"temporary_cleanup_ok":true},
+    {"round":2,"same_article":true,"body_chars":284,"elapsed_ms":3132.919,"preserved_links":13,"sampled_links":13,"temporary_cleanup_ok":true},
+    {"round":3,"same_article":true,"body_chars":284,"elapsed_ms":2547.179,"preserved_links":13,"sampled_links":13,"temporary_cleanup_ok":true}
+  ],
+  "subprocess_exit_verified": null
+}

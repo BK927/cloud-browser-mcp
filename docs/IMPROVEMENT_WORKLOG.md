@@ -212,3 +212,163 @@ Do not report unrun installation, isolation or performance tests as passing.
   sampling limits, source identities and remaining user-environment gates. New
   web ChatGPT image understanding and Debian amd64 field deployment are not
   inferred from Pi/CI results. These documentation changes are not a new release.
+
+## DCInside / YouTube public-reading repair (2026-10-04)
+
+This is a local implementation checkpoint from `d9209cc`, not a deployment or
+an exact-commit CI result. Existing unfinished WPE work is preserved separately;
+the repair does not select another engine, raise RAM/swap limits, reset credentials,
+replace profiles, change routes or restart any production/sibling service.
+
+### Implemented changes
+
+- Known password/OTP/secret controls and their owning forms are excluded before
+  collecting values, accessible names, AX enrichment, body text or form digests.
+  A public article remains readable. Explicit authentication still stops all AI
+  observation, and exhausted privacy inspection fails closed.
+- `safe_url` preserves ASCII numeric `no` (1–12 digits) only on the exact HTTPS
+  DCInside public article routes. Unknown/authentication parameters remain masked.
+- Memory-limited `auto` retains fresh bounded semantic text and controls. The
+  first oversized control is also shortened to leave body-text space, including
+  at 256/4000 characters. Interactive-only queries retain their full output budget.
+  Capture admission uses actual image geometry in the worker; optional capture
+  refusal retains text and reports the reason. No hard memory limit is changed.
+- `inspect` distinguishes ordinary, protected, inaccessible, hidden and offscreen
+  frames. Safe visible frames remain visible; protected/unknown regions are masked
+  or the image is refused when reliable masking is impossible. Main/child privacy
+  epochs and geometry checks reject transient protected changes during capture.
+- Scoped queries use rendered matches rather than the first hidden duplicate and
+  return explicit empty/partial reasons. Open/nested Shadow DOM and composed slots
+  are inspected within budgets; closed Shadow DOM remains unsupported.
+- A bounded backend-node LRU is independent of the latest query. Partial reads do
+  not discard unrelated live IDs, but actual replacement, changed target meaning,
+  input/form state, document movement and private-control transitions are rejected.
+- Fill/select/multi-select/check validate the actual final target state. A known
+  mismatch is `ACTION_GOAL_NOT_MET`; uncertain post-dispatch state is
+  `RESULT_UNCERTAIN`, not success and not an automatic retry. ASCII typing delivers
+  key events; Unicode insertion does not claim IME composition. Selection emits
+  synthetic input/change events and declares that limitation.
+- Private-control transitions revoke outstanding approvals and issued identifiers
+  for that work without deleting execution deduplication. Page-provided functions
+  are blocked around protected/uninspectable content even when filtered public DOM
+  observation is allowed.
+
+### Local evidence and limits
+
+The local environment is Windows, Python 3.13.11, DrissionPage 4.1.1.4 and Chrome
+154. Browser tests use disposable headless profiles and controlled loopback pages,
+not the user's profile or accounts. Dependency versions were not changed.
+
+- Full browser regression: 173 passed / 4 skipped (719.42 s). Three skipped opt-in
+  public tests were subsequently enabled and passed: W3C `aria-expanded` true→false,
+  real HTTP MCP worker/image, and strict/balanced private approval paths. The
+  focused final observation/target/live run was 29 passed (137.78 s); its overlapping
+  tests are not additional unique coverage. Native WebMCP registration remains
+  skipped because this Chromium does not advertise the required native API.
+- Final non-browser regression: 586 passed / 5 skipped (48.92 s), including the
+  40-test public-canary harness, output schemas, accounting/admission boundaries,
+  approval invalidation and bounded node registry. Ruff checks passed; 28 touched
+  Python files passed format checks and `git diff --check` passed. Unrelated
+  pre-existing formatting differences were not rewritten.
+- OAuth/private-console real-browser forms: seven passed after updating the fixture
+  to approve before handoff, since handoff correctly invalidates earlier approvals.
+  Its fake worker uses deterministic test resources; production resource checks
+  were not relaxed.
+- Live host load also caused unrelated `RESOURCE_PRESSURE` setup failures in
+  fake-worker unit tests. Their shared fixture and automatic-action test now use
+  explicit deterministic resource samples. The actual resource-accounting test
+  restores the production sampler against its controlled cgroup/host fixture;
+  142 focused action/approval/resource/lease regressions passed. Actual browser
+  capture admission is not mocked by the public-site canary.
+- One parallel run exposed the existing ingress test's 100ms idle deadline under
+  browser load. The independent ingress suite passed 11/11. No ingress timeout or
+  production relay code was changed to hide this timing-sensitive failure.
+- `scripts/public_read_canary.py` performs bounded, read-only public-page repeats,
+  follows one actual returned DC article link and verifies its article identity and
+  rendered body, and diagnoses YouTube description candidates using only geometry.
+  Reports exclude scraped URLs, article numbers, body text, images and raw errors.
+  Windows owned-directory cleanup retries are bounded; shutdown-method return is
+  explicitly not proof that every browser subprocess has exited.
+- The YouTube description probe found two `#description` candidates: the first was
+  hidden by an ancestor with zero geometry, and the second was rendered. Both
+  repeat probes returned 138 characters of scoped description. This post-query
+  evidence reproduces the hidden-duplicate failure mechanism; it is not a snapshot
+  of the earlier Pi failure itself.
+- Repeated public reads returned DC article text (287 scoped characters), bounded
+  auto text and preserved all 12 sampled numeric article links per list. Partial
+  frames remained explicitly reported. One subsequent repeat refused a DC visual
+  request with `SCREEN_CHANGED`; optional YouTube captures also sometimes reported
+  `SCREEN_CHANGED`/`RESOURCE_PRESSURE` while retaining text. These are refusals, not
+  successful images or bot-block evidence. The harness keeps failed runs as failed.
+- Final two-repeat canary (after the pagination and link-roundtrip changes): all
+  eight fixed-page semantic/auto reads and both DC/YT scoped bodies were nonempty;
+  each DC list preserved 12/12 sampled numeric article links. One actual returned
+  DC link roundtrip verified the same article with 284 rendered body characters;
+  the other timed out at the unchanged 20-second navigation deadline. Seven of
+  eight explicit images were returned; the other YouTube image was refused with
+  `SCREEN_CHANGED`. Both temporary directories were removed, but subprocess exit
+  was not independently verified. Accordingly the final visual/roundtrip harness
+  returned `ok=false`/exit 1, not an all-clear. Earlier failures are retained.
+  Local unit/browser successes do not imply failure-free public-site operation.
+
+### Deployment-owner follow-up
+
+The existing **배포용 세션** owns operational application. Before upgrading, preserve
+the environment, OAuth DB, profiles, routes and rollback release; keep other MCPs
+unchanged. After local privacy regressions, switch that deployment's explicit
+`CB_IFRAME_SCREENSHOT_POLICY=block` override to `inspect` (the source default and
+example already use inspect). Do not weaken failed masking or CAPTCHA handling.
+
+Repeat DC list/article/link roundtrip and YouTube search/description on the Pi under
+the unchanged 1GiB cgroup budget. Verify bounded fresh auto text, large capture
+refusal, hidden/ordinary/protected frames, approval isolation and cleanup. Record
+partial/failure outcomes rather than treating fast refusals as successful reads.
+Web ChatGPT connection/image understanding, real accounts, video playback, subtitles,
+Pi response times/memory savings and the final source's Docker/native CI remain
+unverified by this checkpoint. No performance-saving percentage is inferred from
+Windows results or mocked resource-admission tests.
+
+## Split navigation and capture consistency (2026-10-05)
+
+Publication is isolated on `codex/public-read-stability`, based on `9b514f6`.
+The earlier dirty WPE checkout is preserved, not staged or deployed. This repair
+retains main's passkey authentication updates, DrissionPage 4.1.1.4, Chromium,
+OAuth/lease/approval policy, profiles, routes and existing resource limits.
+
+- Added call/tab/operator navigation budget precedence: a 60-second new-install
+  default and immutable 300-second operator ceiling. Existing environments are
+  not rewritten. Pending navigation is not reported as a completed load.
+- Browser initialization and navigation return owned progress within five
+  seconds, including a provisional tab-less result on slow cold startup.
+  Cached owned status, a bounded operation journal and short worker probes
+  preserve result correlation and single dispatch after client disconnection.
+  Active navigation is not reclaimed as an idle lease. A delayed progress probe
+  stays pending rather than orphaning an already dispatched worker job.
+- Completion still requires the actual document/history transition and complete
+  readiness. Page timeouts do not terminate another work's browser. Only proven
+  browser-process exit permits work-local expiry; unverified transport/worker
+  failures retain the shared failure boundary.
+- Image proof reports fixed, payload-free change reasons. Only verified
+  presentation changes allow one fresh recapture after 200ms within the shared
+  15-second budget. Private changes, document swaps, unknown masking and memory
+  pressure do not retry. Failed optional images preserve fresh text.
+- Internal frame handles are retained separately from public actionable frame
+  states. A stable private frame no longer turns into an unknown all-frame mask
+  merely because it is correctly excluded from the public node registry.
+  Handles remain bounded to the current frame inventory and are cleared on
+  document changes and private control.
+- Frame document/attachment callbacks chain the SDK's existing handlers rather
+  than replacing them. The monotonic lifetime proof covers document restoration
+  as well as lifecycle initialization, and monitoring is removed during private
+  control. Reinstalling it does not stack duplicate wrappers.
+- Runtime CI, opt-in HTTP tests and operator benchmarks now finish pending
+  navigation through owned status, never by opening another work. Measurements
+  record initial response separately from load completion; partial-open handles
+  survive error results for cleanup. For a byte-identical old-baseline benchmark,
+  copy `src/cloud_browser/client_progress.py` beside the standalone benchmark
+  script, without modifying that baseline's installed package or runtime.
+
+Verification results and remaining operational gates are recorded in
+[STABILITY_VALIDATION_2026-10-05.md](STABILITY_VALIDATION_2026-10-05.md).
+No production update, Pi performance improvement, or final ChatGPT connection
+is inferred from local development tests.

@@ -46,7 +46,9 @@ class Settings(BaseSettings):
     memory_per_session_mb: int = Field(192, ge=64)
     max_sessions: int = Field(2, ge=1, le=8)
     max_capture_pixels: int = Field(8_000_000, ge=786432)
-    navigation_timeout: float = Field(20, ge=1, le=30)
+    node_registry_bytes: int = Field(2 * 1024 * 1024, ge=64 * 1024, le=16 * 1024 * 1024)
+    navigation_timeout: float = Field(60, ge=1, le=300)
+    navigation_max_timeout: float = Field(300, ge=1, le=300)
     auth_rules: dict[str, AuthRule] = Field(default_factory=dict)
     webmcp_enabled: bool = True
     webmcp_testing: bool = False
@@ -80,6 +82,8 @@ class Settings(BaseSettings):
 
     @model_validator(mode="after")
     def safe_deployment(self):
+        if self.navigation_timeout > self.navigation_max_timeout:
+            raise ValueError("Default navigation timeout exceeds the operator ceiling")
         if self.grant_max_ttl < self.refresh_ttl:
             raise ValueError("OAuth grant lifetime must cover the refresh token lifetime")
         if self.display_number + self.max_sessions > 1000:

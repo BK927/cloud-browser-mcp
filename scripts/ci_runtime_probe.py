@@ -19,6 +19,7 @@ import psutil
 from mcp import ClientSession
 from mcp.client.streamable_http import streamable_http_client
 
+from cloud_browser.client_progress import finish_navigation
 from cloud_browser.config import Settings
 from cloud_browser.oauth import Auth
 from cloud_browser.runtime import DataLock
@@ -99,6 +100,13 @@ async def main():
                         assert value, (name, "missing structured result")
                         if value.get("lease_id"):
                             leases[value["session_id"]] = value["lease_id"]
+                        if name in ("open", "navigate"):
+
+                            async def poll(identity):
+                                progress, _ = await call("status", **identity)
+                                return progress
+
+                            value = await finish_navigation(value, poll)
                         assert value["status"] in (
                             "ok",
                             "no_change",

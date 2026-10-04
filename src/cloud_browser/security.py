@@ -27,7 +27,7 @@ def public_document_csp(callback: str | None = None) -> str:
 
 
 SENSITIVE = re.compile(
-    r"password|passwd|one.?time|otp|auth.?code|credit.?card|card.?number|cc-number|cc-csc|secret|api.?key|access.?token|refresh.?token|security.?answer",
+    r"password|passwd|one.?time|otp|auth.?code|auth.?token|verification.?code|credit.?card|card.?number|cc-number|cc-csc|secret|api.?key|access.?token|refresh.?token|security.?answer|비밀번호|인증\s*(번호|코드)|일회용\s*(번호|코드)|카드\s*번호|보안\s*답변",
     re.I,
 )
 TOKEN = re.compile(
@@ -86,8 +86,18 @@ def safe_url(url: str) -> str:
         }
 
         def public_value(key, value):
+            # DCInside's public article number is navigation data, not a token.
+            # Keep this exception origin/path/type-bound; unknown keys stay redacted.
+            public_article_number = (
+                key == "no"
+                and p.scheme == "https"
+                and p.hostname == "gall.dcinside.com"
+                and p.port in (None, 443)
+                and p.path in {"/board/view/", "/mgallery/board/view/", "/mini/board/view/"}
+                and re.fullmatch(r"[0-9]{1,12}", value) is not None
+            )
             if (
-                key.casefold() not in public_keys
+                (key.casefold() not in public_keys and not public_article_number)
                 or len(value) > 1000
                 or TOKEN.search(value)
                 or SECRET_ASSIGNMENT.search(value)

@@ -108,9 +108,20 @@ async def test_proxy_check_rejects_private_or_mixed_dns(proxy, monkeypatch, host
         b"http://example.com:80/",
     ],
 )
-async def test_dns_rpc_rejects_unsafe_or_malformed_authorities(proxy, target):
+async def test_dns_rpc_rejects_unsafe_or_malformed_authorities(proxy, target, monkeypatch):
+    # Exercise real policy with controlled legacy-IP resolution, not external DNS.
+    original = socket.getaddrinfo
+
+    def legacy_loopback(host, port, *args, **kwargs):
+        return original(
+            "127.0.0.1" if host in ("127.1", "2130706433") else host, port, *args, **kwargs
+        )
+
+    monkeypatch.setattr(socket, "getaddrinfo", legacy_loopback)
+    targets = no_target_connections(monkeypatch)
     reply = await wire(proxy[1], b"CB-DNS-CHECK " + target + b" HTTP/1.1\r\nHost: ignored\r\n\r\n")
     assert reply.startswith(b"HTTP/1.1 403")
+    assert not targets
     assert b"X-Cloud-Browser-DNS-Policy: public-v1" in reply
 
 
@@ -222,21 +233,31 @@ async def test_service_open_checks_egress_before_allocating_session(service, pro
 @pytest.mark.parametrize("operation", ["open", "goto", "back", "forward"])
 def test_adapter_checks_proxy_before_navigation_or_browser_start(operation, monkeypatch):
     adapter = object.__new__(DrissionAdapter)
-    adapter.cfg = SimpleNamespace(network_isolated=True, browser_proxy="http://egress:3128")
+    adapter.cfg = SimpleNamespace(
+        network_isolated=True,
+        browser_proxy="http://egress:3128",
+        navigation_timeout=60,
+        navigation_max_timeout=300,
+    )
     checks = []
 
     def denied(url, *, dns_proxy=None):
         checks.append((url, dns_proxy))
         raise BrowserError("EGRESS_UNAVAILABLE", "Simulated unavailable proxy")
 
-    def cdp(command):
+    def cdp(command, **kwargs):
         assert command == "Page.getNavigationHistory"
         return {
             "currentIndex": 1,
             "entries": [{"id": i, "url": "https://example.com/"} for i in range(3)],
         }
 
-    state = SimpleNamespace(tab=SimpleNamespace(url="https://example.com/", run_cdp=cdp))
+    state = SimpleNamespace(
+        tab=SimpleNamespace(url="https://example.com/", run_cdp=cdp),
+        navigation_job=None,
+        options={},
+        history_methods={},
+    )
     adapter._tab = lambda *args: state
     monkeypatch.setattr("cloud_browser.drission.validate_url", denied)
     with pytest.raises(BrowserError) as exc:

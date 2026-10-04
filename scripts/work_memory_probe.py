@@ -16,6 +16,8 @@ import httpx2
 from mcp import ClientSession
 from mcp.client.streamable_http import streamable_http_client
 
+from cloud_browser.client_progress import finish_navigation
+
 RESOURCE_KEYS = (
     "host_available_mb",
     "available_mb",
@@ -58,12 +60,23 @@ async def probe(client, *, mode, url, budget_mb=1024, settle_seconds=2, sleep=as
             records.append({"phase": phase, "tool": name, "status": "transport_error"})
             raise ProbeStop("TRANSPORT_ERROR") from None
         value = raw.structured_content or {}
+        initial_ms = round((time.monotonic() - before) * 1000)
+        if name in ("browser_open", "browser_navigate"):
+
+            async def poll(identity):
+                progress = await client.call_tool("browser_status", identity)
+                return progress.structured_content or {}
+
+            value = await finish_navigation(
+                value, poll, max_wait_seconds=210 - (time.monotonic() - started)
+            )
         records.append(
             {
                 "phase": phase,
                 "tool": name,
                 "unix_time": time.time(),
                 "elapsed_ms": round((time.monotonic() - before) * 1000),
+                "initial_response_ms": initial_ms,
                 "status": value.get("status"),
                 "error": (value.get("error") or {}).get("code"),
                 "images": sum(item.type == "image" for item in raw.content),

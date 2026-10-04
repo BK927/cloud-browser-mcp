@@ -122,8 +122,9 @@ def test_real_stale_replaced_dom_and_screenshot(browser):
     state.tab.run_js(
         "document.querySelector('#accordion').outerHTML=document.querySelector('#accordion').outerHTML"
     )
-    with pytest.raises(BrowserError, match="target changed"):
+    with pytest.raises(BrowserError) as replaced:
         adapter.act(sid, tid, obs["revision"], {"type": "click", "node_id": target["node_id"]})
+    assert replaced.value.code == "STALE_NODE"
     shot = adapter.observe(sid, tid, mode="visual")
     assert shot["_image"]["mimeType"] == "image/jpeg"
     sid_image = shot["observation"]["screenshot"]["screenshot_id"]
@@ -149,9 +150,10 @@ def test_real_cursor_and_protected_screen(browser):
     state.tab.run_js(
         "document.body.insertAdjacentHTML('afterbegin','<input type=password value=secret>')"
     )
-    with pytest.raises(BrowserError) as exc:
-        adapter.observe(sid, tid, mode="visual")
-    assert exc.value.code == "AUTH_REQUIRED"
+    protected = adapter.observe(sid, tid, mode="visual")
+    assert protected["observation"]["protected_regions_omitted"]
+    assert protected["observation"]["screenshot"]["masked_regions"]
+    assert "secret" not in json.dumps(protected)
 
 
 def test_real_popup_and_closed_tab(browser):
