@@ -82,6 +82,7 @@ OBSERVATION = {
 }
 CONFIRMATION = {
     "confirmation_token": "confirm_test",
+    "approval_state": "pending",
     "summary": "click: Submit",
     "current_page": PAGE["url"],
     "destination": None,
@@ -395,15 +396,35 @@ async def test_error_envelopes_match_advertised_schema(registered, name, argumen
 
 
 @pytest.mark.parametrize("name", ["act", "call_page_tool", "dialog", "clipboard"])
-async def test_confirmation_and_replay_shapes(registered, name):
+@pytest.mark.parametrize("approval_state", ["pending", "approved"])
+async def test_confirmation_and_replay_shapes(registered, name, approval_state):
     arguments = next(args for method, args, _ in CASES if method == name)
     await invoke(
         registered,
         name,
         arguments,
-        response("confirmation_required", confirmation=CONFIRMATION, replayed=True),
+        response(
+            "confirmation_required",
+            confirmation=CONFIRMATION | {"approval_state": approval_state},
+            replayed=True,
+        ),
     )
     await invoke(registered, name, arguments, response("no_change", operation={"state": "running"}))
+
+
+async def test_confirmation_schema_declares_and_checks_approval_state(registered):
+    schema = next(
+        t.output_schema for t in await registered[0].list_tools() if t.name == "browser_act"
+    )
+    confirmation = schema["$defs"]["Confirmation"]
+    assert confirmation["properties"]["approval_state"]["enum"] == ["pending", "approved"]
+    assert "approval_state" in confirmation["required"]
+    with pytest.raises(ValidationError):
+        Draft202012Validator(schema).validate(
+            response(
+                "confirmation_required", confirmation=CONFIRMATION | {"approval_state": "consumed"}
+            )
+        )
 
 
 @pytest.mark.parametrize("name", ["observe", "artifacts"])

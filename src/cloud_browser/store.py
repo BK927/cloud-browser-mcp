@@ -58,6 +58,13 @@ class Store:
             self.db.execute("DELETE FROM kv WHERE kind=? AND key=?", (kind, digest(key)))
             return value
 
+    def expires_at(self, kind, key):
+        with self.lock:
+            row = self.db.execute(
+                "SELECT expires FROM kv WHERE kind=? AND key=?", (kind, digest(key))
+            ).fetchone()
+            return row[0] if row else None
+
     def delete(self, kind, key):
         with self.lock:
             self.db.execute("DELETE FROM kv WHERE kind=? AND key=?", (kind, digest(key)))

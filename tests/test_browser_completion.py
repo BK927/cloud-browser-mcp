@@ -9,6 +9,36 @@ from cloud_browser.models import BrowserError
 pytestmark = pytest.mark.browser
 
 
+@pytest.mark.parametrize("wait_state", ["absent", "hidden"])
+@pytest.mark.parametrize("style", ["width:0;height:0;border:0", "display:none"])
+def test_negative_wait_succeeds_with_invisible_iframe(browser, wait_state, style):
+    adapter, sid, tid, _ = browser
+    adapter._tab(sid, tid).tab.run_js(
+        "document.body.innerHTML='<button>Ready</button><iframe style=\"' + arguments[0] + '\"></iframe>'",
+        style,
+    )
+    result = adapter.wait(
+        sid, tid, {"type": "element", "query": {"selector": ".spinner"}, "state": wait_state}, 0
+    )
+    assert result["wait"]["matched"] and not result["wait"]["partial"]
+    inventory = adapter._tab(sid, tid).data["frames"]
+    assert len(inventory) == 1 and inventory[0]["reason"] == "FRAME_NOT_VISIBLE"
+
+
+@pytest.mark.parametrize("wait_state", ["absent", "hidden"])
+def test_negative_wait_stays_partial_for_visible_sensitive_iframe(browser, wait_state):
+    adapter, sid, tid, _ = browser
+    adapter._tab(sid, tid).tab.run_js("""
+        document.body.innerHTML='<iframe style="width:200px;height:100px"></iframe>';
+        document.querySelector('iframe').contentDocument.body.innerHTML='<input type=password>';
+    """)
+    result = adapter.wait(
+        sid, tid, {"type": "element", "query": {"selector": ".spinner"}, "state": wait_state}, 0
+    )
+    assert not result["wait"]["matched"] and result["wait"]["partial"]
+    assert adapter._tab(sid, tid).data["frames"][0]["reason"] == "SENSITIVE_FRAME"
+
+
 def test_native_accessibility_name_and_select_choices(browser):
     adapter, sid, tid, _ = browser
     adapter._tab(sid, tid).tab.run_js("""

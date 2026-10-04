@@ -1989,7 +1989,7 @@ class DrissionAdapter:
         }
         return shot, {"data": image, "mimeType": mime_type}
 
-    def prepare(self, session_id, tab_id, expected_revision, action):
+    def prepare(self, session_id, tab_id, expected_revision, action, completion=None):
         state = self._tab(session_id, tab_id)
         if action["type"] == "dialog":
             dialog = state.events.dialog
@@ -2026,6 +2026,32 @@ class DrissionAdapter:
         finally:
             registry.pinned.difference_update(protected_ids)
         self._guard_page(data)
+        selectors = [
+            value
+            for key, value in (completion or {}).get("query", {}).items()
+            if key in ("selector", "scope") and value is not None
+        ]
+        if selectors:
+            # Parse in the existing page without another observation or page-world hooks.
+            world = state.tab.run_cdp(
+                "Page.createIsolatedWorld",
+                frameId=state.tab._frame_id,
+                worldName="cloud-browser-observer",
+            )["executionContextId"]
+            checked = state.tab.run_cdp(
+                "Runtime.evaluate",
+                expression="(()=>{try{for(const selector of "
+                + json.dumps(selectors)
+                + "){document.querySelector(selector);}return true;}"
+                "catch(e){if(e.name==='SyntaxError')return false;throw e;}})()",
+                contextId=world,
+                returnByValue=True,
+            )
+            valid = checked.get("result", {}).get("value")
+            if "exceptionDetails" in checked or type(valid) is not bool:
+                raise BrowserError("BROWSER_ERROR", "Completion selector could not be validated")
+            if not valid:
+                raise BrowserError("INVALID_SELECTOR", "Completion CSS selector is invalid")
         if not data["form_state_complete"] and action["type"] not in PASSIVE_ACTIONS:
             raise BrowserError(
                 "UNSUPPORTED_OPERATION",
@@ -2338,9 +2364,40 @@ class DrissionAdapter:
         )
 
     def act(self, session_id, tab_id, expected_revision, action):
-        self.prepare(session_id, tab_id, expected_revision, action)
-        state = self._tab(session_id, tab_id)
-        before_navigation = self._navigation_marker(state)
+        state = None
+        dispatched = False
+
+        def error_details(verified=None):
+            details = {
+                "action_result": {"performed": dispatched, "target_state_verified": verified}
+            }
+            if state is not None:
+                details.update(
+                    revision=state.revision,
+                    page={
+                        "url": safe_url(state.data.get("url", "about:blank")),
+                        "title": redact(state.data.get("title"))
+                        if state.data.get("title")
+                        else None,
+                    },
+                    page_cached=verified is None,
+                )
+            return details
+
+        try:
+            state = self._tab(session_id, tab_id)
+            self.prepare(session_id, tab_id, expected_revision, action)
+            before_navigation = self._navigation_marker(state)
+        except BrowserError as exc:
+            exc.details = error_details() | exc.details
+            exc.details["action_result"] = error_details()["action_result"]
+            raise
+        except Exception as exc:
+            raise BrowserError(
+                "BROWSER_ERROR",
+                "Action failed before dispatch; nothing was sent",
+                **error_details(),
+            ) from exc
         if action["type"] == "dialog":
             try:
                 state.tab.handle_alert(
@@ -2366,28 +2423,27 @@ class DrissionAdapter:
                     **navigation_outcome(before_navigation, self._navigation_marker(state)),
                 },
             )
-        before_fp = state.fingerprint
-        before_frames = state.frames_fingerprint
-        old_tabs = set(self._session(session_id)["tabs"])
-        typ = action["type"]
-        target_state, target = self._node_target(state, action.get("node_id"))
-        element = self.Element(target_state.tab, backend_id=target[0]) if target else None
+        try:
+            before_fp = state.fingerprint
+            before_frames = state.frames_fingerprint
+            old_tabs = set(self._session(session_id)["tabs"])
+            typ = action["type"]
+            target_state, target = self._node_target(state, action.get("node_id"))
+            element = self.Element(target_state.tab, backend_id=target[0]) if target else None
+            native = NativeInput(state.tab)
+        except BrowserError as exc:
+            exc.details = error_details() | exc.details
+            exc.details["action_result"] = error_details()["action_result"]
+            raise
+        except Exception as exc:
+            raise BrowserError(
+                "BROWSER_ERROR",
+                "Action failed before dispatch; nothing was sent",
+                **error_details(),
+            ) from exc
         performed = True
-        dispatched = False
         tool_result = None
         target_state_verified = None
-        native = NativeInput(state.tab)
-
-        def error_details(verified=None):
-            return {
-                "revision": state.revision,
-                "page": {
-                    "url": safe_url(state.data.get("url", "about:blank")),
-                    "title": redact(state.data.get("title")) if state.data.get("title") else None,
-                },
-                "page_cached": verified is None,
-                "action_result": {"performed": dispatched, "target_state_verified": verified},
-            }
 
         def native_click(click_count=1):
             nonlocal dispatched
@@ -2412,7 +2468,12 @@ class DrissionAdapter:
             )
 
         def focus_exact():
-            target_state.tab.run_cdp("DOM.focus", backendNodeId=target[0])
+            try:
+                target_state.tab.run_cdp("DOM.focus", backendNodeId=target[0])
+            except Exception as exc:
+                raise BrowserError(
+                    "NODE_NOT_ACTIONABLE", "Observed element cannot receive keyboard focus"
+                ) from exc
             if not self._target_value(
                 target_state,
                 target[0],
@@ -2421,7 +2482,9 @@ class DrissionAdapter:
                 "for(let depth=0;active&&depth<64;depth++,active=active.assignedSlot||active.parentElement||active.getRootNode()?.host)"
                 "{if(active===this)return true;}return false;",
             ):
-                raise BrowserError("NODE_NOT_ACTIONABLE", "Observed element cannot receive focus")
+                raise BrowserError(
+                    "NODE_NOT_ACTIONABLE", "Observed element cannot receive keyboard focus"
+                )
 
         try:
             if typ == "page_tool":
@@ -2563,7 +2626,7 @@ class DrissionAdapter:
                         **error_details(False),
                     )
         except BrowserError as exc:
-            if exc.code == "ACTION_GOAL_NOT_MET":
+            if dispatched and exc.code == "ACTION_GOAL_NOT_MET":
                 raise
             if dispatched:
                 raise BrowserError(
@@ -2571,6 +2634,8 @@ class DrissionAdapter:
                     "Action was dispatched but its outcome could not be observed; do not repeat",
                     **error_details(),
                 ) from exc
+            exc.details = error_details() | exc.details
+            exc.details["action_result"] = error_details()["action_result"]
             raise
         except Exception as exc:
             if dispatched and state.events.dialog:
@@ -2589,8 +2654,10 @@ class DrissionAdapter:
                     ],
                 )
             raise BrowserError(
-                "RESULT_UNCERTAIN",
-                "Action may have been dispatched; do not repeat automatically",
+                "RESULT_UNCERTAIN" if dispatched else "BROWSER_ERROR",
+                "Action may have been dispatched; do not repeat automatically"
+                if dispatched
+                else "Action failed before dispatch; nothing was sent",
                 **error_details(),
             ) from exc
         finally:
@@ -2823,9 +2890,21 @@ class DrissionAdapter:
                 if typ == "url":
                     matched = state.tab.url == condition["value"]
                 else:
-                    partial = any(
-                        seen["observation"].get(key)
-                        for key in ("truncated", "interactive_truncated", "frame_reading_truncated")
+                    observation = seen["observation"]
+                    frame_partial = observation.get("frame_reading_truncated", False)
+                    if condition.get("state") in ("absent", "hidden") and frame_partial:
+                        frames = observation.get("frames")
+                        if frames:
+                            # Zero-area/hidden frames are reported as FRAME_NOT_VISIBLE.
+                            # Missing inventory or any other unreadable reason stays unknown.
+                            frame_partial = any(
+                                not frame.get("readable")
+                                and frame.get("reason") != "FRAME_NOT_VISIBLE"
+                                for frame in frames
+                            )
+                    partial = (
+                        any(observation.get(key) for key in ("truncated", "interactive_truncated"))
+                        or frame_partial
                     )
                     nodes = [
                         json.loads(line)

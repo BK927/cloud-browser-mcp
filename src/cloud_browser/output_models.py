@@ -83,7 +83,7 @@ class BrowserOutput(OutputModel):
     session_id: str | None
     tab_id: str | None
     selected_tab_id: str | None = None
-    revision: int | None = Field(description="Revision for actions.")
+    revision: int | None = Field(description="For actions.")
     page: Page | None
     notices: list[str]
     error: Error | None
@@ -123,7 +123,7 @@ class Navigation(NavigationDetails):
 
 class OpenOutput(BrowserOutput):
     operation_id: str | None = None
-    lease_id: str | None = Field(None, description="Keep this work lease for subsequent calls.")
+    lease_id: str | None = Field(None, description="Keep work lease for calls.")
     expires_at: str | None = None
     navigation: Navigation | None = None
     current_page: Page | None = None
@@ -261,9 +261,8 @@ class SentField(OutputModel):
 
 
 class Confirmation(OutputModel):
-    confirmation_token: str = Field(
-        description="Pending token; only the human console can approve."
-    )
+    confirmation_token: str = Field(description="Single-use, console-approved token.")
+    approval_state: Literal["pending", "approved"]
     summary: str
     current_page: str
     destination: str | None

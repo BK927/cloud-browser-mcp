@@ -124,6 +124,45 @@ async def test_real_dom_change_between_prepare_and_dispatch_still_blocks(balance
     assert node(adapter, sid, tid, "Delete account")[1]["expanded"] == "true"
 
 
+async def test_real_non_focusable_keypress_does_not_lock_session(balanced):
+    service, adapter, sid, tid, _ = balanced
+    adapter.cfg.approval_policy = "strict"
+    tab = adapter._tab(sid, tid).tab
+    tab.run_js(r"""
+        document.body.innerHTML='<div role="button">Non focusable</div>' +
+          '<button onclick="this.textContent=\'Clicked\'">Valid action</button>';
+    """)
+    args = args_for(adapter, sid, tid, "Non focusable", type="keypress", keys=["ENTER"])
+    proposal = await service.call("act", **args)
+    assert proposal["status"] == "confirmation_required"
+    token = proposal["confirmation"]["confirmation_token"]
+    await service.approve(next(iter(service.pending)), True)
+    failed = await service.call("act", **args, confirmation_token=token)
+    assert failed["error"]["code"] == "NODE_NOT_ACTIONABLE"
+    assert failed["action_result"]["performed"] is False
+    assert not service.sessions[sid]["uncertain"]
+    valid = args_for(adapter, sid, tid, "Valid action")
+    proposal = await service.call("act", **valid)
+    token = proposal["confirmation"]["confirmation_token"]
+    review_id = next(key for key, item in service.pending.items() if item["token"] == token)
+    await service.approve(review_id, True)
+    succeeded = await service.call("act", **valid, confirmation_token=token)
+    assert succeeded["status"] == "ok"
+    assert succeeded["action_result"]["performed"] is True
+    assert node(adapter, sid, tid, "Clicked")[1]["name"] == "Clicked"
+
+
+async def test_real_invalid_completion_selector_fails_before_click(balanced):
+    service, adapter, sid, tid, _ = balanced
+    args = args_for(adapter, sid, tid, "Personal Information")
+    failed = await service.call(
+        "act", **args, completion={"type": "element", "query": {"selector": "["}}
+    )
+    assert failed["error"]["code"] == "INVALID_SELECTOR"
+    assert not service.sessions[sid]["uncertain"]
+    assert node(adapter, sid, tid, "Personal Information")[1]["expanded"] == "true"
+
+
 @pytest.mark.parametrize(
     "mutation",
     [

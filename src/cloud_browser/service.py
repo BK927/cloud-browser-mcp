@@ -11,7 +11,7 @@ from pydantic import ValidationError
 from .approval import PASSIVE_ACTIONS
 from .authentication import MANUAL_METHODS
 from .config import Settings
-from .models import BrowserError, ObservationQuery, response
+from .models import BrowserError, ObservationQuery, WaitCondition, response
 from .navigation_pacing import NavigationPacer
 from .operation_diagnostics import log_capacity
 from .ownership import check_ownership, durable_owner, new_ownership
@@ -1303,6 +1303,13 @@ class BrowserService:
         session = self._session(session_id)
         self._check_control(session_id)
         self._check_uncertain(session_id)
+        if completion is not None:
+            try:
+                completion = WaitCondition.model_validate(completion).model_dump(exclude_none=True)
+            except ValidationError as exc:
+                raise BrowserError("INVALID_INPUT", "Invalid completion condition") from exc
+            if not 0 <= completion_timeout_ms <= 10000:
+                raise BrowserError("INVALID_INPUT", "Completion timeout must be 0..10000 ms")
         engine_action = action
         if action["type"] == "upload":
             if session_id in self.owners and any(
@@ -1366,6 +1373,7 @@ class BrowserService:
                 tab_id=tab_id,
                 expected_revision=expected_revision,
                 action=engine_action,
+                **({"completion": completion} if completion is not None else {}),
             )
         except BrowserError as exc:
             if confirmation_token and exc.code in (
@@ -1411,7 +1419,12 @@ class BrowserService:
                     return {
                         **{k: prepared[k] for k in ("session_id", "tab_id", "revision", "page")},
                         "status": "confirmation_required",
-                        "confirmation": item["confirmation"],
+                        "confirmation": item["confirmation"] | {"approval_state": record["state"]},
+                        "notices": [
+                            "The user approved this exact action. Call browser_act again with the same arguments plus confirmation_token before expires_at."
+                        ]
+                        if record["state"] == "approved"
+                        else [],
                     }
             if len(self.pending) >= 32:
                 raise BrowserError(
@@ -1422,6 +1435,7 @@ class BrowserService:
             expires = time.time() + self.cfg.approval_ttl
             confirmation = {
                 "confirmation_token": token,
+                "approval_state": "pending",
                 "summary": f"{action['type']}: {prepared['target']}",
                 "current_page": prepared["page"]["url"],
                 "destination": prepared.get("destination"),
@@ -1464,17 +1478,29 @@ class BrowserService:
             }
         # Ordinary edits need no new-tab reserve. Capture/navigation have their
         # own admission budgets; always preserve cleanup and small observations.
+        approval_record = None
+        approval_expires = None
+        removed_pending = {}
+        execution_recorded = False
         if confirmation_token:
             # Consume before dispatch, including when dispatch returns an uncertain result.
             with self.store.transaction():
                 record = self.store.get("approval", confirmation_token)
                 if not record or record["state"] != "approved":
                     raise BrowserError("CONFIRMATION_USED", "Approval cannot be reused")
+                approval_record = record.copy()
+                approval_expires = self.store.expires_at("approval", confirmation_token)
                 record["state"] = "consumed"
                 self.store.put("approval", confirmation_token, record, 86400)
                 self.store.put(
                     "execution", binding, {"dispatched": True}, max(86400, self.cfg.session_ttl)
                 )
+                execution_recorded = True
+            removed_pending = {
+                key: item
+                for key, item in self.pending.items()
+                if item["token"] == confirmation_token
+            }
             self.pending = {
                 key: item
                 for key, item in self.pending.items()
@@ -1486,18 +1512,64 @@ class BrowserService:
             self.store.put(
                 "execution", binding, {"dispatched": True}, max(86400, self.cfg.session_ttl)
             )
-        result = await self._rpc(
-            "act",
-            session_id=session_id,
-            tab_id=tab_id,
-            expected_revision=expected_revision,
-            action=engine_action,
-        )
+            execution_recorded = True
+        try:
+            result = await self._rpc(
+                "act",
+                session_id=session_id,
+                tab_id=tab_id,
+                expected_revision=expected_revision,
+                action=engine_action,
+            )
+        except BrowserError as exc:
+            if (
+                exc.code != "RESULT_UNCERTAIN"
+                and exc.details.get("action_result", {}).get("performed") is False
+            ):
+                # Only an explicit worker guarantee of no dispatch permits retry.
+                # Never renew the approved window or undo a later revocation.
+                with self.store.transaction():
+                    if execution_recorded:
+                        self.store.delete("execution", binding)
+                    if approval_record is not None:
+                        current = self.store.get("approval", confirmation_token)
+                        remaining = approval_expires - time.time()
+                        if current == record and remaining > 0:
+                            self.store.put(
+                                "approval", confirmation_token, approval_record, remaining
+                            )
+                            self.pending.update(removed_pending)
+            raise
         if "action_policy" in prepared:
             result["action_policy"] = prepared["action_policy"]
         if completion and result.get("action_result", {}).get("performed"):
             try:
-                waited = await self._wait(session_id, tab_id, completion, completion_timeout_ms)
+                deadline = time.monotonic() + completion_timeout_ms / 1000
+                while True:
+                    try:
+                        waited = await self._wait(
+                            session_id,
+                            tab_id,
+                            completion,
+                            max(0, int((deadline - time.monotonic()) * 1000)),
+                        )
+                        break
+                    except BrowserError as exc:
+                        remaining = deadline - time.monotonic()
+                        if (
+                            exc.code
+                            not in (
+                                "BROWSER_ERROR",
+                                "OBSERVATION_FAILED",
+                                "NAVIGATION_IN_PROGRESS",
+                                "SCREEN_CHANGED",
+                            )
+                            or remaining <= 0
+                        ):
+                            raise
+                        await asyncio.sleep(min(0.2, remaining))
+                        if time.monotonic() >= deadline:
+                            raise
                 result["completion"] = waited.get("wait")
                 if not result["completion"].get("matched"):
                     uncertain = bool(result["completion"].get("partial"))
@@ -1669,7 +1741,13 @@ class BrowserService:
             ) != session.get("approval_epoch", 0):
                 raise BrowserError("CONFIRMATION_STALE", "Manual control invalidated this approval")
             record["state"] = "approved" if approved else "denied"
-            self.store.put("approval", token, record, max(1, item["expires"] - time.time()))
+            if approved:
+                item["expires"] = time.time() + self.cfg.approval_ttl
+                item["confirmation"]["expires_at"] = iso(item["expires"])
+                item["confirmation"]["approval_state"] = "approved"
+                self.store.put("approval", token, record, self.cfg.approval_ttl)
+            else:
+                self.store.put("approval", token, record, max(1, item["expires"] - time.time()))
             # Keep the bounded record until expiry so browser_status reports denials.
 
     def _invalidate_approvals(self, session_id):

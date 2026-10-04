@@ -44,6 +44,8 @@ open/nested Shadow DOM과 slot의 composed tree를 예산 안에서 탐색합니
 `wait`의 present/absent는 숨겨진 요소를 포함한 DOM 존재 여부이고,
 visible/hidden은 렌더링 여부(뷰포트 밖도 포함), enabled는 렌더링된 비활성 아님을 뜻합니다.
 불완전한 조회로 부재나 숨김을 성공이라고 판정하지 않습니다.
+단, `FRAME_NOT_VISIBLE`인 숨김·면적 0 프레임은 absent/hidden의 불완전 판정에서 제외합니다.
+보호·예산 초과·검사 실패 등 다른 이유로 읽지 못한 프레임은 계속 불완전으로 취급합니다.
 시간 제한은 조건 반복 대기의 한도이며 마지막 브라우저 관찰 호출 시간은 추가될 수 있습니다.
 
 ## browser_read
@@ -252,8 +254,15 @@ CONFIRMATION_STALE. 소비한 토큰은 CONFIRMATION_USED. 거절한 토큰은 C
 자동 재요청하지 않습니다. 결과 불명은 RESULT_UNCERTAIN이며 그 세션의 다음 action도
 수동 확인 전까지 차단합니다. `balanced`는 알려진 외부 변경을 허용하는 모드가 아니며,
 페이지 JavaScript의 부작용을 완벽히 증명하는 보안 경계도 아닙니다.
+입력 전달 전 실패는 `action_result.performed=false`인 일반 오류이며 세션을 잠그지 않습니다.
+이 경우에만 해당 실행 기록을 지우고 소비한 승인을 남은 유효 시간으로 복원합니다.
+이미 전달했거나 전달 여부가 불명확하면 승인·중복 방지 기록을 복원하지 않습니다.
 
 동일 문서·프레임·대상·행동·전송 데이터의 미완료 승인 요청은 하나로 합칩니다.
+사용자 승인 시점부터 `CB_APPROVAL_TTL`의 새 유효 시간을 부여하며 `expires_at`도 갱신합니다.
+토큰 없이 같은 요청을 보내면 `approval_state: pending/approved`로 현재 상태를 알립니다.
+approved라도 실행하려면 만료 전 동일 인자에 `confirmation_token`을 추가해야 합니다.
+비공개 콘솔의 목록 페이지는 10초마다 자동으로 갱신합니다.
 무관한 페이지 갱신은 허용하되 대상·폼·경로가 달라지면 승인을 폐기합니다. 실행 전 결합의 소비
 기록도 저장하므로 화면 변화가 없더라도 토큰을 빼고 재호출해 중복 실행할 수 없습니다.
 의도적인 같은 행동의 반복도 새 페이지 상태 또는 수동 확인이 필요합니다. 결과 불명 상태에서는
@@ -347,6 +356,9 @@ ACTION_GOAL_NOT_MET, SENSITIVE_TARGET, PRIVACY_INSPECTION_INCOMPLETE도 사용�
 입력·선택·체크는 같은 backend의 실제 목표 값을 확인하고 `target_state_verified`를 반환합니다.
 알려진 불일치는 ACTION_GOAL_NOT_MET, 확인 불가는 RESULT_UNCERTAIN이며 이미 전달한 행동을
 자동 재실행하지 않습니다. 명시적 completion 실패도 `ok`로 표시하지 않습니다.
+completion의 CSS 선택자는 입력 전달 전 검증합니다. 완료 관찰 중 일시적인 페이지 변경 오류는
+남은 제한 시간 안에서 재관찰하며 행동은 반복하지 않습니다. 확정된 미충족은
+ACTION_GOAL_NOT_MET, 불완전·확인 불가는 RESULT_UNCERTAIN과 세션 잠금으로 반환합니다.
 디시 게시글 HTTPS 경로의 숫자형 `no`는 공개 식별자로 보존하며 그 밖의 비밀성 URL 값은 제거합니다.
 CONTROL_DISCONNECT_FAILED는 원격 제어 연결을 안전하게 끊지 못한 경우입니다.
 좌표는 문서·viewport·스크롤·적중 요소·가림·의미를 재검증합니다. DOM 대상이 없으면

@@ -94,12 +94,16 @@ def control_app(cfg, auth, service):
         ):
             return JSONResponse({"error": "Invalid login form"}, status_code=403)
         if not (
-            verify_passkey_proof(cfg.passkey_bridge_secret, nonce, "control", str(form.get("passkey_assertion", "")))
+            verify_passkey_proof(
+                cfg.passkey_bridge_secret, nonce, "control", str(form.get("passkey_assertion", ""))
+            )
             or await auth.password_ok(str(form.get("password", "")))
         ):
             return JSONResponse({"error": "Login denied"}, status_code=403)
         token = secrets.token_urlsafe(32)
-        auth.store.put("control", token, {"csrf": secrets.token_urlsafe(32)}, cfg.control_session_ttl)
+        auth.store.put(
+            "control", token, {"csrf": secrets.token_urlsafe(32)}, cfg.control_session_ttl
+        )
         result = RedirectResponse("/", status_code=303)
         result.set_cookie(
             "cb_control",
@@ -125,8 +129,8 @@ def control_app(cfg, auth, service):
         user = identity(request.cookies)
         csrf = html.escape(user["csrf"], quote=True)
         blocks = [
-            "<!doctype html><meta charset=utf-8><title>Private browser console</title><h1>Private browser console</h1>",
-            "<p>Only approve actions you recognize. Website text is untrusted. Refresh this page for updates.</p>",
+            '<!doctype html><meta charset=utf-8><meta http-equiv="refresh" content="10"><title>Private browser console</title><h1>Private browser console</h1>',
+            "<p>Only approve actions you recognize. Website text is untrusted. This page refreshes automatically every 10 seconds.</p>",
         ]
         work_options = "".join(
             f"<option value='{html.escape(sid, quote=True)}'>{html.escape(sid)}</option>"
