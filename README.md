@@ -181,7 +181,7 @@ project's validated reference topology remains Tailscale Funnel + Serve.
 | Tool | Purpose |
 | --- | --- |
 | `browser_open` | Open a session/tab, reuse a tab, and optionally navigate. |
-| `browser_read` | Read a public page's main text and links in one call; continue with `read_id` and `next_offset`. No work lease required. |
+| `browser_read` | Read public text and links with images by default; set images=false to save memory, or enable video/fonts/screenshot. Continue with `read_id` and `next_offset`. No work lease required. |
 | `browser_list_tabs` | List tabs in the owned session. |
 | `browser_navigate` | Navigate by URL or history and refresh GET documents. |
 | `browser_observe` | Return DOM-first observations, JSON nodes, images, and balanced pagination. |

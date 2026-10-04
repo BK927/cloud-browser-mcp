@@ -34,6 +34,7 @@ from .navigation_job import NavigationJob
 from .node_registry import NodeRegistry
 from .observation import compact_node, paginate
 from .page_tools import PageTools, schema_fingerprint, scrub_result, validate_arguments
+from .reader_resources import ReaderResources
 from .resources import admission_state, memory_state
 from .runtime import DisplayRuntime
 from .security import (
@@ -142,6 +143,8 @@ class DrissionAdapter:
                 except Exception:
                     pass
                 self.sessions.pop(sid)
+                if session.get("reader_resources"):
+                    session["reader_resources"].close()
                 session["artifacts"].close()
                 self.runtimes.pop(sid).close()
             # Never silently unlock a live/unknown private authentication screen.
@@ -170,6 +173,8 @@ class DrissionAdapter:
                         "Emulation.setTimezoneOverride", timezoneId=self.cfg.browser_timezone
                     )
                 self._viewport(state)
+                if session.get("reader_resources"):
+                    session["reader_resources"].attach(tab)
 
                 if not session.get("paused"):
                     self._watch_document(state)
@@ -1214,7 +1219,25 @@ class DrissionAdapter:
             options.set_argument("about:blank")
             options.set_argument("--dns-prefetch-disable")
             options.set_argument("--force-webrtc-ip-handling-policy=disable_non_proxied_udp")
-            options.set_argument("--disable-features=Translate,MediaRouter")
+            for flag in (
+                "--disable-background-networking",
+                "--disable-component-update",
+                "--disable-sync",
+                "--disable-default-apps",
+                "--disable-breakpad",
+                "--disable-domain-reliability",
+                "--metrics-recording-only",
+            ):
+                options.set_argument(flag)
+            features = {"Translate", "MediaRouter", "OptimizationHints"}
+            for argument in options.arguments:
+                if argument.startswith("--disable-features="):
+                    features.update(argument.split("=", 1)[1].split(","))
+            options.remove_argument("--disable-features")
+            if profile == "reader" and not self.cfg.reader_site_isolation:
+                options.set_argument("--disable-site-isolation-trials")
+                features.update(("IsolateOrigins", "site-per-process"))
+            options.set_argument("--disable-features", ",".join(sorted(features)))
             if self.cfg.webmcp_testing:
                 options.set_argument("--enable-features=WebMCP")
             if self.cfg.browser_proxy:
@@ -1235,6 +1258,7 @@ class DrissionAdapter:
                 "tabs": {},
                 "selected": None,
                 "process_ref": process,
+                "reader_resources": ReaderResources() if profile == "reader" else None,
             }
             try:
                 self._start_artifacts(sid)
@@ -1246,6 +1270,8 @@ class DrissionAdapter:
                     browser.quit()
                 finally:
                     partial = self.sessions.pop(sid)
+                    if partial.get("reader_resources"):
+                        partial["reader_resources"].close()
                     if partial.get("artifacts"):
                         partial["artifacts"].close()
                     self.runtimes.pop(sid).close()
@@ -1269,6 +1295,17 @@ class DrissionAdapter:
             self._tab(sid, tid).tab.get("about:blank", retry=0)
         self._capture_state(self._tab(sid, tid))
         return self._result(sid, tid)
+
+    def reader_configure(self, session_id, tab_id, loaded):
+        session = self._session(session_id)
+        resources = session.get("reader_resources")
+        if resources is None:
+            raise BrowserError("INVALID_INPUT", "Resource choices require the reader profile")
+        resources.reset(loaded)
+        self._tab(session_id, tab_id)  # Initialize newly discovered tabs with this policy.
+        for state in session["tabs"].values():
+            resources.apply(state.tab)
+        return {"session_id": session_id, "tab_id": tab_id}
 
     def list_tabs(self, session_id):
         self._sync(session_id)
@@ -1674,7 +1711,10 @@ class DrissionAdapter:
                 state.cursors.pop(next(iter(state.cursors)))
             obs["next_cursor"] = next_cursor
         extra = {}
-        if not cursor and (mode == "visual" or (mode == "auto" and data["has_canvas"])):
+        reader_screenshot = bool(reader_options and reader_options.get("screenshot"))
+        if not cursor and (
+            reader_screenshot or mode == "visual" or (mode == "auto" and data["has_canvas"])
+        ):
             document_key = state.document_key
             try:
                 shot, pixels = self._capture_image(state, data, full_page, lightweight)
@@ -1684,7 +1724,7 @@ class DrissionAdapter:
                 state.screenshot = None
                 # Optional imagery must not turn a safe fresh text observation
                 # into a failure. Explicit visual requests still get the error.
-                if (
+                if not reader_screenshot and (
                     mode == "visual"
                     or exc.code
                     not in (
@@ -1699,6 +1739,7 @@ class DrissionAdapter:
                 obs["screenshot_omitted"] = {
                     "code": exc.code,
                     "message": exc.message,
+                    **({"reason": exc.details["reason"]} if "reason" in exc.details else {}),
                     **{
                         k: exc.details[k]
                         for k in ("capture_reasons", "capture_attempts")
@@ -1729,6 +1770,9 @@ class DrissionAdapter:
         if reader_options:
             # DrissionPage's tab.url/title properties wait for full load. Use
             # the privacy-checked isolated-world snapshot for interactive reads.
+            resources = self._session(session_id).get("reader_resources")
+            if resources:
+                obs["blocked_requests"] = resources.count["blocked_requests"]
             return dict(
                 session_id=session_id,
                 tab_id=tab_id,
@@ -1739,6 +1783,7 @@ class DrissionAdapter:
                 },
                 observation=obs,
                 notices=notices,
+                **extra,
             )
         return self._result(session_id, tab_id, observation=obs, notices=notices, **extra)
 
@@ -3156,6 +3201,8 @@ class DrissionAdapter:
             for state in session["tabs"].values():
                 self._stop_page_tools(state)
             session["browser"].quit()
+            if session.get("reader_resources"):
+                session["reader_resources"].close()
             session["artifacts"].close()
             del self.sessions[session_id]
             self.runtimes.pop(session_id).close()
@@ -3164,6 +3211,8 @@ class DrissionAdapter:
         self._stop_page_tools(state)
         if len(session["tabs"]) == 1:
             session["browser"].quit()
+            if session.get("reader_resources"):
+                session["reader_resources"].close()
             session["artifacts"].close()
             del self.sessions[session_id]
             self.runtimes.pop(session_id).close()
@@ -3185,6 +3234,9 @@ class DrissionAdapter:
                 session["artifacts"].close()
             except Exception:
                 pass
+            finally:
+                if session.get("reader_resources"):
+                    session["reader_resources"].close()
         self.sessions.clear()
         for runtime in self.runtimes.values():
             runtime.close()

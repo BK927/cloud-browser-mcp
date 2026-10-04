@@ -12,7 +12,7 @@ from cloud_browser.models import BrowserError
 
 
 @pytest.fixture
-def fake_adapter(tmp_path, monkeypatch):
+def fake_adapter(tmp_path, monkeypatch, request):
     def create(*, profile=None, **settings):
         adapter = object.__new__(DrissionAdapter)
         adapter.cfg = Settings(
@@ -23,7 +23,7 @@ def fake_adapter(tmp_path, monkeypatch):
             **settings,
         )
         adapter.sessions, adapter.runtimes = {}, {}
-        options = Mock(arguments=[], prefs={})
+        options = Mock(arguments=["--disable-features=PrivacySandboxSettings4"], prefs={})
         for method in (
             "set_browser_path",
             "set_local_port",
@@ -36,6 +36,10 @@ def fake_adapter(tmp_path, monkeypatch):
             arg if value is None else f"{arg}={value}"
         )
         options.set_pref.side_effect = lambda name, value: options.prefs.update({name: value})
+        options.remove_argument.side_effect = lambda name: options.arguments.__setitem__(
+            slice(None),
+            [arg for arg in options.arguments if arg != name and not arg.startswith(name + "=")],
+        )
         adapter.Options = Mock(return_value=options)
         browser = Mock(process_id=0)
         browser.get_tabs.return_value = [Mock(tab_id="initial")]
@@ -46,11 +50,44 @@ def fake_adapter(tmp_path, monkeypatch):
         adapter._result = Mock(return_value={})
         monkeypatch.setattr("cloud_browser.drission.DisplayRuntime", Mock())
         adapter.open("ses_test", profile=profile)
+        if profile == "reader":
+            request.addfinalizer(adapter.sessions["ses_test"]["reader_resources"].close)
         adapter.Options.assert_called_once_with(read_file=False)
         adapter.Chromium.assert_called_once_with(options)
         return adapter, options, browser
 
     return create
+
+
+@pytest.mark.parametrize("profile", [None, "reader"])
+@pytest.mark.parametrize("isolation", [True, False])
+def test_light_launch_and_reader_site_isolation(fake_adapter, profile, isolation):
+    _, options, _ = fake_adapter(profile=profile, reader_site_isolation=isolation)
+    assert {
+        "--disable-background-networking",
+        "--disable-component-update",
+        "--disable-sync",
+        "--disable-default-apps",
+        "--disable-breakpad",
+        "--disable-domain-reliability",
+        "--metrics-recording-only",
+    } <= set(options.arguments)
+    merged = [arg for arg in options.arguments if arg.startswith("--disable-features=")]
+    assert len(merged) == 1
+    features = {"PrivacySandboxSettings4", "Translate", "MediaRouter", "OptimizationHints"}
+    relaxed = profile == "reader" and not isolation
+    if relaxed:
+        features.update(("IsolateOrigins", "site-per-process"))
+    assert set(merged[0].split("=", 1)[1].split(",")) == features
+    assert ("--disable-site-isolation-trials" in options.arguments) == relaxed
+    options.remove_argument.assert_called_once_with("--disable-features")
+
+
+def test_site_isolation_setting_default_and_environment(monkeypatch):
+    monkeypatch.delenv("CB_READER_SITE_ISOLATION", raising=False)
+    assert Settings(_env_file=None, development=True).reader_site_isolation is True
+    monkeypatch.setenv("CB_READER_SITE_ISOLATION", "false")
+    assert Settings(_env_file=None, development=True).reader_site_isolation is False
 
 
 @pytest.mark.parametrize("profile", [None, "reader"])

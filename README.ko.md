@@ -91,7 +91,7 @@ Docker 없이 Debian 13 arm64/amd64에 설치하려면 [네이티브 설치](doc
 | 도구 | 내용 |
 |---|---|
 | `browser_open` | 새 세션·탭, 기존 탭 재사용, 선택적 URL 이동 |
-| `browser_read` | 공개 페이지 본문·링크를 한 번에 읽기. 임대 불필요, `read_id`와 `next_offset`으로 이어 읽기 |
+| `browser_read` | 공개 본문·링크 읽기. images 기본 true(메모리 절약 시 false), video/fonts/screenshot 선택 가능. 임대 불필요, `read_id`·`next_offset`으로 이어 읽기 |
 | `browser_list_tabs` | 탭 조회 |
 | `browser_navigate` | URL·기록 이동, GET 문서 새로고침 |
 | `browser_observe` | 본문 우선 렌더링 DOM, 완전한 JSON 노드, 이미지, 균형 페이지네이션 |

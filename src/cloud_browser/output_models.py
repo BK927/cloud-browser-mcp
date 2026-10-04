@@ -235,6 +235,9 @@ class ReadDetails(OutputModel):
     resource_limited: bool
     protected_regions_omitted: bool
     frame_reading_truncated: bool | None = None
+    loaded: list[Literal["images", "video", "fonts"]]
+    blocked_requests: int
+    screenshot_omitted: dict[str, str] | None = None
 
 
 class ReadOutput(BrowserOutput):

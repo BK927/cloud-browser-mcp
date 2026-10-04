@@ -54,10 +54,27 @@ visible/hidden은 렌더링 여부(뷰포트 밖도 포함), enabled는 렌더�
 결과의 `read_id` 중 정확히 하나를 지정합니다. `offset`은 기본 0, `max_chars`는 기본
 20000(1000..100000), `selector`는 본문 범위를 정하는 선택적 CSS 선택자입니다.
 응답의 `page`는 URL·제목, `read`는 본문·링크·완료 여부와 생략·제한 플래그를 담습니다.
-`session_id`, `tab_id`, `revision`은 null이며 임대·승인·스크린샷이 필요하지 않습니다.
+`session_id`, `tab_id`, `revision`은 null이며 임대·승인이 필요하지 않습니다.
+`images`는 기본 true이며 이미지가 많은 페이지에서 메모리를 절약하려면 false로 지정합니다.
+`video`(영상·오디오)와 `fonts`(웹 폰트)는 기본 false이며 필요할 때만 true로 켭니다.
+`read.loaded`에 실제 활성화된 유형을 이름순으로 반환합니다. 생략 유형은
+reader 페이지 타깃의 CDP Fetch에서 요청 단계에 `BlockedByClient`로 차단하며,
+`read.blocked_requests`는 이번 읽기에서 차단한 요청 수입니다. 문서·iframe·스크립트·
+스타일시트·XHR/Fetch·WebSocket은 계속 로드합니다. 선택은 탐색 전에 매번 갱신하고,
+새 탭·팝업은 관리 탭으로 발견할 때 적용합니다(발견 전 요청은 차단되지 않을 수 있습니다).
+별도 타깃인 out-of-process iframe의 리소스는 차단 범위 밖이며 세션 도구는 차단하지 않습니다.
+
+`screenshot`도 기본 false입니다. true이면 본문 관찰 뒤 viewport 이미지를 실제 MCP 이미지
+콘텐츠로 반환합니다(기본 JPEG, 마스킹 시 PNG). images·fonts를 자동으로 켜며(video는
+지정값 유지), 이때 false였던
+선택을 바꾸면 notice를 반환합니다. `browser_observe`와 같은 캡처 입장 검사·마스킹·
+`SENSITIVE_SCREEN` 보호를 적용하며, 캡처 거절·자원 부족 시 본문은 그대로 반환하고
+`read.screenshot_omitted`에 code와 가능한 reason을 둡니다.
 긴 본문은 `read_id`와 `next_offset`으로 이어 읽습니다. 캐시는 호출자별 최대 4개,
 10분 유효하며 브라우저나 페이지 변경에 영향을 받지 않습니다. 링크는 첫 조각에만
 최대 200개 반환하며 인증 URL 값은 가립니다. 만료·다른 호출자 ID는 `READ_NOT_FOUND`입니다.
+`read_id`로 받는 캐시 조각은 screenshot=true여도 이미지를 반환하지 않으며 로딩 선택도
+변경하지 않습니다. `loaded`와 `blocked_requests`는 원래 읽기의 값을 유지합니다.
 
 서버가 공개 읽기 전용 브라우저 하나를 필요할 때 시작합니다. 로그인하지 않는
 `profiles/reader` 프로필을 유지하고 기본 300초 유휴 후 브라우저만 닫습니다.
@@ -72,7 +89,7 @@ visible/hidden은 렌더링 여부(뷰포트 밖도 포함), enabled는 렌더�
 | 도구 | 입력 |
 |---|---|
 | open | session_id?, url?, new_tab=true, lease_id?, timeout_ms? |
-| read | url? 또는 read_id? (정확히 하나), offset=0, max_chars=20000, selector? |
+| read | url? 또는 read_id? (정확히 하나), offset=0, max_chars=20000, selector?, images=true, video=false, fonts=false, screenshot=false |
 | list_tabs | session_id |
 | navigate | session_id, tab_id, operation=goto/back/forward/reload, url?, timeout_ms?, operation_id? |
 | observe | session_id, tab_id, mode=auto/semantic/interactive/visual, full_page=false, max_chars?, cursor?, query? |

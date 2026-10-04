@@ -55,6 +55,7 @@ class Settings(BaseSettings):
     navigation_min_interval_ms: int = Field(1500, ge=0, le=60000)
     navigation_per_host_per_minute: int = Field(30, ge=1, le=600)
     reader_enabled: bool = True
+    reader_site_isolation: bool = True
     reader_idle_ttl: int = Field(300, ge=60, le=3600)
     reader_timeout: float = Field(25, ge=5, le=40)
     reader_max_text_chars: int = Field(60000, ge=4000, le=250000)

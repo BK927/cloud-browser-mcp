@@ -576,12 +576,24 @@ class BrowserService:
         )
 
     async def _read(
-        self, principal, url=None, read_id=None, offset=0, max_chars=None, selector=None
+        self,
+        principal,
+        url=None,
+        read_id=None,
+        offset=0,
+        max_chars=None,
+        selector=None,
+        images=True,
+        video=False,
+        fonts=False,
+        screenshot=False,
     ):
         if not self.cfg.reader_enabled:
             raise BrowserError("INVALID_INPUT", "Public reading is disabled")
         if (url is None) == (read_id is None):
             raise BrowserError("INVALID_INPUT", "Exactly one of url and read_id is required")
+        if any(type(value) is not bool for value in (images, video, fonts, screenshot)):
+            raise BrowserError("INVALID_INPUT", "Resource and screenshot choices must be booleans")
         max_chars = 20000 if max_chars is None else max_chars
         if type(offset) is not int or offset < 0:
             raise BrowserError("INVALID_INPUT", "offset must be a nonnegative integer")
@@ -605,6 +617,16 @@ class BrowserService:
                 )
             return self._read_slice(read_id, item, offset, max_chars)
 
+        overrides = screenshot and (not images or not fonts)
+        loaded = sorted(
+            name
+            for name, enabled in (
+                ("images", images or screenshot),
+                ("video", video),
+                ("fonts", fonts or screenshot),
+            )
+            if enabled
+        )
         await self._validate_navigation_url(url)
         # Pacing precedes both locks; loading still serializes only reader pages.
         async with (
@@ -644,6 +666,7 @@ class BrowserService:
                     await self._cancel_navigation(sid)
                     await self._rpc("navigation_cancel", session_id=sid, tab_id=tid)
                     self._admit(64, "navigation")
+                    await self._rpc("reader_configure", session_id=sid, tab_id=tid, loaded=loaded)
                     result = await self._begin_navigation(
                         sid,
                         tid,
@@ -672,12 +695,15 @@ class BrowserService:
                         reader_options={
                             "collect_links": True,
                             "max_text_chars": self.cfg.reader_max_text_chars,
+                            "screenshot": screenshot,
                         },
                     )
                     self._touch(sid)
                 obs = observed["observation"]
                 text = obs.get("semantic_snapshot", "")[: self.cfg.reader_max_text_chars]
                 notices = list(observed.get("notices", []))
+                if overrides:
+                    notices.append("screenshot=true enabled images and fonts for this read")
                 if not complete:
                     notices.append(
                         "NAVIGATION_TIMEOUT: loading stopped; returning partial page text"
@@ -693,6 +719,8 @@ class BrowserService:
                     "notices": notices,
                     "read": {
                         "complete": complete,
+                        "loaded": loaded,
+                        "blocked_requests": obs.get("blocked_requests", 0),
                         "text": text,
                         "total_chars": len(text),
                         "text_capped": bool(
@@ -721,7 +749,16 @@ class BrowserService:
                 for old in owned[: max(0, len(owned) - 3)]:
                     del self.read_cache[old]
                 self.read_cache[rid] = item
-                return self._read_slice(rid, item, offset, max_chars)
+                result = self._read_slice(rid, item, offset, max_chars)
+                if screenshot:
+                    if observed.get("_image"):
+                        result["_image"] = observed["_image"]
+                    elif obs.get("screenshot_omitted"):
+                        omitted = obs["screenshot_omitted"]
+                        result["read"]["screenshot_omitted"] = {
+                            key: omitted[key] for key in ("code", "reason") if key in omitted
+                        }
+                return result
             except BrowserError as exc:
                 if exc.code in ("CAPTCHA_REQUIRED", "BOT_BLOCKED", "PRIVACY_INSPECTION_INCOMPLETE"):
                     exc.details["notices"] = [

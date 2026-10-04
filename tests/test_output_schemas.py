@@ -114,6 +114,8 @@ CASES = [
                 "links_truncated": False,
                 "resource_limited": False,
                 "protected_regions_omitted": False,
+                "loaded": ["images"],
+                "blocked_requests": 0,
             }
         },
     ),
@@ -319,8 +321,24 @@ async def test_reader_annotations_and_input_descriptions(registered):
         "offset",
         "max_chars",
         "selector",
+        "images",
+        "video",
+        "fonts",
+        "screenshot",
     }
     assert all(prop.get("description") for prop in tool.input_schema["properties"].values())
+    properties = tool.input_schema["properties"]
+    assert properties["images"]["default"] is True
+    assert properties["video"]["default"] is False
+    assert properties["fonts"]["default"] is False
+    assert properties["screenshot"]["default"] is False
+    assert properties["images"]["description"] == (
+        "Load images (default true); set false to save memory on image-heavy pages."
+    )
+    assert properties["video"]["description"] == "Load video and audio."
+    assert properties["screenshot"]["description"] == (
+        "Return a viewport image; also loads images and fonts."
+    )
 
 
 async def invoke(registered, name, arguments, payload):
@@ -496,19 +514,26 @@ async def test_confirmation_schema_declares_and_checks_approval_state(registered
         )
 
 
-@pytest.mark.parametrize("name", ["observe", "artifacts"])
+@pytest.mark.parametrize("name", ["read", "observe", "artifacts"])
 async def test_images_remain_multimodal_without_entering_schema(registered, name):
     arguments = next(args for method, args, _ in CASES if method == name)
+    if name == "read":
+        arguments = arguments | {"screenshot": True}
     shot = {"data": "aGVsbG8=", "mimeType": "image/png"}
-    payload = response(
-        **({"observation": OBSERVATION} if name == "observe" else {"artifact": ARTIFACT})
+    extra = (
+        next(extra for method, _, extra in CASES if method == "read")
+        if name == "read"
+        else ({"observation": OBSERVATION} if name == "observe" else {"artifact": ARTIFACT})
     )
+    payload = response(**extra)
     result = await invoke(registered, name, arguments, payload | {"_image": shot})
     assert len(result.content) == 2
     assert result.content[1].type == "image"
     assert result.content[1].data == shot["data"]
     assert result.content[1].mime_type == shot["mimeType"]
     assert "_image" not in result.structured_content
+    if name == "read":
+        assert registered[1].call.await_args.kwargs["screenshot"] is True
 
 
 async def test_validation_rejects_wrong_nested_types(registered):

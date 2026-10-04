@@ -17,7 +17,7 @@ from cloud_browser.security import reader_safe_url
 def reader(service, monkeypatch):
     monkeypatch.setattr("cloud_browser.service.validate_url", lambda url, **kw: None)
     original = service.worker.call
-    state = {"text": "A" * 2500, "error": None, "guard": None}
+    state = {"text": "A" * 2500, "error": None, "guard": None, "capture_refusal": None}
 
     async def invoke(method, **args):
         if method in ("navigation_begin", "navigation_poll", "navigation_cancel"):
@@ -50,7 +50,17 @@ def reader(service, monkeypatch):
                 links_truncated=False,
                 protected_regions_omitted=True,
                 frame_reading_truncated=False,
+                blocked_requests=3,
             )
+            if args.get("reader_options", {}).get("screenshot"):
+                if state["capture_refusal"]:
+                    result["observation"]["screenshot_omitted"] = {
+                        "code": state["capture_refusal"],
+                        "reason": "fixture_refusal",
+                        "message": "No safe capture",
+                    }
+                else:
+                    result["_image"] = {"data": "fixture-jpeg", "mimeType": "image/jpeg"}
         return result
 
     monkeypatch.setattr(service.worker, "call", invoke)
@@ -70,6 +80,7 @@ async def test_read_and_cached_continuation(reader):
     assert "lease_id" not in first and "operation_id" not in first
     assert "blogId=someuser" in first["page"]["url"]
     result = first["read"]
+    assert result["loaded"] == ["images"]
     assert result["complete"] is True and result["text"] == "A" * 1000
     assert result["links"] == [
         {"text": "Article", "url": "https://example.com/article?blogId=user"}
@@ -89,6 +100,109 @@ async def test_read_and_cached_continuation(reader):
     last = await service.call("read", _principal="alice", read_id=result["read_id"], offset=2000)
     assert last["read"]["text"] == "A" * 500 and last["read"]["next_offset"] is None
     assert len(service.worker.calls) == count
+
+
+@pytest.mark.parametrize(
+    "enabled",
+    [
+        [],
+        ["images"],
+        ["video"],
+        ["fonts"],
+        ["images", "video"],
+        ["images", "fonts"],
+        ["video", "fonts"],
+        ["images", "video", "fonts"],
+    ],
+)
+async def test_resource_choices_applied_before_each_navigation(reader, enabled):
+    service, _ = reader
+    first = await read(service, **{name: name in enabled for name in ("images", "video", "fonts")})
+    assert first["read"]["loaded"] == sorted(enabled)
+    assert first["read"]["blocked_requests"] == 3
+    ReadOutput.model_validate(first)
+    assert "_image" not in first
+    calls = service.worker.calls
+    configured = next(i for i, (method, _) in enumerate(calls) if method == "reader_configure")
+    assert calls[configured][1]["loaded"] == sorted(enabled)
+    assert configured < next(
+        i for i, (method, _) in enumerate(calls) if method == "navigation_begin"
+    )
+    # Persistent browser choices reset on the following read.
+    second = await read(service)
+    assert second["read"]["loaded"] == ["images"]
+    assert [args["loaded"] for method, args in calls if method == "reader_configure"] == [
+        sorted(enabled),
+        ["images"],
+    ]
+
+
+@pytest.mark.parametrize("video", [False, True])
+@pytest.mark.parametrize(
+    "images,fonts", [(False, False), (True, False), (False, True), (True, True)]
+)
+async def test_reader_screenshot_implies_resources_and_is_never_cached(
+    reader, video, images, fonts
+):
+    service, _ = reader
+    first = await read(service, screenshot=True, video=video, images=images, fonts=fonts)
+    assert first["status"] == "ok" and first["_image"]["mimeType"] == "image/jpeg"
+    expected = ["fonts", "images", "video"] if video else ["fonts", "images"]
+    assert first["read"]["loaded"] == expected
+    assert any("enabled images and fonts" in n for n in first["notices"]) == (
+        not images or not fonts
+    )
+    configured = next(args for method, args in service.worker.calls if method == "reader_configure")
+    assert configured["loaded"] == expected
+    observed = next(args for method, args in service.worker.calls if method == "observe")
+    assert observed["mode"] == "semantic" and observed["reader_options"]["screenshot"] is True
+    count = len(service.worker.calls)
+    for offset in (0, 1000):
+        sliced = await service.call(
+            "read",
+            _principal="alice",
+            read_id=first["read"]["read_id"],
+            offset=offset,
+            screenshot=True,
+        )
+        assert "_image" not in sliced and sliced["read"]["loaded"] == expected
+    assert len(service.worker.calls) == count
+    assert "_image" not in service.read_cache[first["read"]["read_id"]]
+
+
+@pytest.mark.parametrize(
+    "code", ["SENSITIVE_SCREEN", "RESOURCE_PRESSURE", "SCREEN_CHANGED", "CAPTURE_TIMEOUT"]
+)
+async def test_reader_refused_capture_preserves_text(reader, code):
+    service, state = reader
+    state["capture_refusal"] = code
+    result = await read(service, screenshot=True)
+    assert result["status"] == "ok" and result["read"]["text"] == state["text"]
+    assert result["read"]["screenshot_omitted"] == {"code": code, "reason": "fixture_refusal"}
+    assert "_image" not in result
+    ReadOutput.model_validate(result)
+
+
+async def test_interactive_session_never_requests_reader_interception(reader):
+    service, _ = reader
+    await read(service)
+    opened = await service.call("open", _principal="alice")
+    args = {key: opened[key] for key in ("session_id", "tab_id", "lease_id")}
+    observed = await service.call(
+        "observe", _principal="alice", mode="auto", max_chars=4000, **args
+    )
+    assert observed["status"] == "ok"
+    interactive = [
+        args for _, args in service.worker.calls if args.get("session_id") == opened["session_id"]
+    ]
+    assert interactive and all(
+        "reader_options" not in args and "loaded" not in args for args in interactive
+    )
+    assert all(
+        args["session_id"] == service.reader_sid
+        for method, args in service.worker.calls
+        if method == "reader_configure"
+    )
 
 
 async def test_read_cache_principal_expiry_and_limit(reader):
@@ -115,6 +229,10 @@ async def test_read_cache_principal_expiry_and_limit(reader):
         {"url": "https://example.com", "offset": -1},
         {"read_id": "x", "max_chars": 999},
         {"url": "https://example.com", "selector": "x" * 1001},
+        {"url": "https://example.com", "images": "true"},
+        {"url": "https://example.com", "video": 1},
+        {"url": "https://example.com", "fonts": None},
+        {"url": "https://example.com", "screenshot": []},
     ],
 )
 async def test_invalid_read_inputs(service, args):

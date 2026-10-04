@@ -189,6 +189,17 @@ def create_apps(settings: Settings, *, worker=None):
                     description="Optional CSS selector to scope text to rendered matches.",
                 ),
             ] = None,
+            images: Annotated[
+                bool,
+                Field(
+                    description="Load images (default true); set false to save memory on image-heavy pages."
+                ),
+            ] = True,
+            video: Annotated[bool, Field(description="Load video and audio.")] = False,
+            fonts: Annotated[bool, Field(description="Load web fonts.")] = False,
+            screenshot: Annotated[
+                bool, Field(description="Return a viewport image; also loads images and fonts.")
+            ] = False,
         ) -> Annotated[CallToolResult, ReadOutput]:
             """Read a public web page through the home browser in one call. Returns main text and links; no lease, session or approval needed. Use read_id and next_offset to continue long pages. Use browser_open/observe/act only for interactive tasks."""
             return await run(
@@ -198,6 +209,10 @@ def create_apps(settings: Settings, *, worker=None):
                 offset=offset,
                 max_chars=max_chars,
                 selector=selector,
+                images=images,
+                video=video,
+                fonts=fonts,
+                screenshot=screenshot,
             )
 
     @mcp.tool(annotations=write)
