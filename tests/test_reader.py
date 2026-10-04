@@ -1,6 +1,7 @@
 import asyncio
 import json
 import time
+from types import SimpleNamespace
 from urllib.parse import parse_qs, urlsplit
 
 import pytest
@@ -301,6 +302,218 @@ async def test_reader_keeps_lightweight_observation_under_pressure(reader, monke
     assert observed["max_chars"] == 4000 and observed["lightweight"] is True
 
 
+@pytest.fixture
+def paced_reader(reader, monkeypatch):
+    service, _ = reader
+    clock, waits = [100.0], []
+    monkeypatch.setattr(
+        "cloud_browser.service.time",
+        SimpleNamespace(monotonic=lambda: clock[0], time=time.time),
+    )
+    service.navigation_pacer.clock = lambda: clock[0]
+
+    async def sleep(delay):
+        assert not service.lock.locked() and not service.reader_lock.locked()
+        waits.append(delay)
+        clock[0] += delay
+
+    service.navigation_pacer.sleep = sleep
+    original = service.worker.call
+
+    async def immediate(method, **args):
+        result = await original(method, **args)
+        if method == "navigation_begin":
+            result["navigation"]["pending"] = False
+        return result
+
+    monkeypatch.setattr(service.worker, "call", immediate)
+    return service, clock, waits
+
+
+async def test_reader_paces_same_host_but_not_different_hosts(paced_reader):
+    service, _, waits = paced_reader
+    assert (await read(service))["status"] == "ok"
+    assert (await read(service))["status"] == "ok"
+    assert waits == [pytest.approx(1.5)]
+    assert (await service.call("read", url="https://other.example/"))["status"] == "ok"
+    assert waits == [pytest.approx(1.5)]
+
+
+async def test_read_open_goto_and_reload_share_normalized_host(paced_reader):
+    service, _, waits = paced_reader
+    assert (await read(service))["status"] == "ok"
+    opened = await service.call("open", url="https://WWW.Example.com/path")
+    assert opened["status"] == "ok"
+    args = {key: opened[key] for key in ("session_id", "tab_id")}
+    assert (await service.call("navigate", **args, operation="goto", url="https://example.com"))[
+        "status"
+    ] == "ok"
+    assert (await service.call("navigate", **args, operation="reload"))["status"] == "ok"
+    assert waits == [pytest.approx(1.5)] * 3
+    assert list(service.navigation_pacer.hosts) == ["example.com"]
+    for operation in ("back", "forward"):
+        assert (await service.call("navigate", **args, operation=operation))["status"] == "ok"
+    assert (await service.call("observe", **args, max_chars=4000))["status"] == "ok"
+    assert (
+        await service.call(
+            "act", **args, expected_revision=1, action={"type": "click", "node_id": "node_1"}
+        )
+    )["status"] == "confirmation_required"
+    service.tab_cache.clear()
+    before = len(service.worker.calls)
+    assert (await service.call("navigate", **args, operation="reload"))["status"] == "ok"
+    assert [method for method, _ in service.worker.calls[before:]] == ["navigation_begin"]
+    assert waits == [pytest.approx(1.5)] * 3
+
+
+async def test_host_cap_and_cached_read_slices(paced_reader):
+    service, clock, waits = paced_reader
+    service.cfg.navigation_min_interval_ms = 0
+    service.cfg.navigation_per_host_per_minute = 2
+    first = await read(service)
+    assert (await read(service))["status"] == "ok"
+    count = len(service.worker.calls)
+    limited = await read(service)
+    assert limited["error"]["code"] == "BROWSER_BUSY"
+    assert limited["busy_reason"] == "host_rate_limit"
+    assert limited["retry_after_seconds"] == 60
+    assert len(service.worker.calls) == count and not waits
+    cached = await service.call(
+        "read", _principal="alice", read_id=first["read"]["read_id"], offset=1000
+    )
+    assert cached["status"] == "ok" and len(service.worker.calls) == count and not waits
+    clock[0] += 60
+    assert (await service.call("read", url="https://other.example/"))["status"] == "ok"
+    assert list(service.navigation_pacer.hosts) == ["other.example"]
+    assert (await read(service))["status"] == "ok"
+
+
+@pytest.mark.parametrize("method", ["read", "open", "navigate"])
+@pytest.mark.parametrize("refusal", ["validation", "worker", "admission"])
+async def test_refused_navigations_are_not_recorded(paced_reader, monkeypatch, method, refusal):
+    service, _, waits = paced_reader
+    args = {"url": "https://example.com/"}
+    if method == "navigate":
+        opened = await service.call("open")
+        args.update(operation="goto", **{key: opened[key] for key in ("session_id", "tab_id")})
+    if refusal == "validation":
+
+        def invalid(url, **kwargs):
+            raise BrowserError("INVALID_URL", "Refused URL")
+
+        monkeypatch.setattr("cloud_browser.service.validate_url", invalid)
+        expected = "INVALID_URL"
+    elif refusal == "worker":
+        original = service.worker.call
+
+        async def refused(method, **args):
+            if method == "navigation_begin":
+                raise BrowserError("INVALID_URL", "Worker refused URL")
+            return await original(method, **args)
+
+        monkeypatch.setattr(service.worker, "call", refused)
+        expected = "INVALID_URL"
+    else:
+
+        def unavailable(*args, **kwargs):
+            raise BrowserError("RESOURCE_PRESSURE", "No navigation headroom")
+
+        monkeypatch.setattr(service, "_admit", unavailable)
+        expected = "RESOURCE_PRESSURE"
+    for _ in range(2):
+        assert (await service.call(method, **args))["error"]["code"] == expected
+        assert not service.navigation_pacer.hosts and not waits
+
+
+@pytest.mark.parametrize("method", ["open", "navigate"])
+@pytest.mark.parametrize("elapsed,interval_ms", [(0, 6000), (3, 3000)])
+async def test_pacing_rejects_waits_outside_initial_response_budget(
+    paced_reader, monkeypatch, method, elapsed, interval_ms
+):
+    service, clock, waits = paced_reader
+    assert (await read(service))["status"] == "ok"
+    service.cfg.navigation_min_interval_ms = interval_ms
+    args = {"url": "https://example.com/"}
+    if method == "navigate":
+        opened = await service.call("open")
+        args.update(operation="goto", **{key: opened[key] for key in ("session_id", "tab_id")})
+    original = service._validate_navigation_url
+
+    async def delayed_validation(url):
+        await original(url)
+        clock[0] += elapsed
+        # Dispatch history may be fresher than call start due to other work.
+        if elapsed:
+            service.navigation_pacer.hosts["example.com"]["dispatches"].append(clock[0])
+
+    monkeypatch.setattr(service, "_validate_navigation_url", delayed_validation)
+    count = len(service.worker.calls)
+    result = await service.call(method, **args)
+    assert result["error"]["code"] == "BROWSER_BUSY"
+    assert result["busy_reason"] == "host_rate_limit"
+    assert result["retry_after_seconds"] == interval_ms // 1000
+    assert len(service.worker.calls) == count and not waits
+
+
+async def test_wait_that_fits_initial_budget_is_dispatched(paced_reader):
+    service, _, waits = paced_reader
+    assert (await read(service))["status"] == "ok"
+    service.cfg.navigation_min_interval_ms = 4000
+    result = await service.call("open", url="https://example.com/")
+    assert result["status"] == "ok" and waits == [pytest.approx(4)]
+
+
+async def test_concurrent_reads_share_dispatch_spacing(paced_reader):
+    service, _, waits = paced_reader
+    results = await asyncio.gather(read(service), read(service))
+    assert all(result["status"] == "ok" for result in results)
+    assert waits == [pytest.approx(1.5)]
+
+
+async def test_waiting_host_leaves_other_hosts_and_locks_available(paced_reader):
+    service, clock, _ = paced_reader
+    assert (await read(service))["status"] == "ok"
+    waiting, resume = asyncio.Event(), asyncio.Event()
+
+    async def sleep(delay):
+        assert not service.lock.locked() and not service.reader_lock.locked()
+        waiting.set()
+        await resume.wait()
+        clock[0] += delay
+
+    service.navigation_pacer.sleep = sleep
+    second = asyncio.create_task(read(service))
+    try:
+        await asyncio.wait_for(waiting.wait(), 1)
+        other = await asyncio.wait_for(service.call("read", url="https://other.example/"), 1)
+        assert other["status"] == "ok" and not second.done()
+    finally:
+        resume.set()
+        result = await second
+    assert result["status"] == "ok"
+
+
+@pytest.mark.parametrize(
+    "setting,value",
+    [
+        ("navigation_min_interval_ms", -1),
+        ("navigation_min_interval_ms", 60001),
+        ("navigation_per_host_per_minute", 0),
+        ("navigation_per_host_per_minute", 601),
+    ],
+)
+def test_navigation_pacing_setting_bounds(setting, value):
+    with pytest.raises(ValidationError):
+        Settings(development=True, **{setting: value})
+
+
+def test_navigation_pacing_environment_settings(monkeypatch):
+    monkeypatch.setenv("CB_NAVIGATION_MIN_INTERVAL_MS", "0")
+    monkeypatch.setenv("CB_NAVIGATION_PER_HOST_PER_MINUTE", "600")
+    cfg = Settings(_env_file=None, development=True)
+    assert cfg.navigation_min_interval_ms == 0 and cfg.navigation_per_host_per_minute == 600
+
+
 @pytest.mark.parametrize(
     "key", ["token", "code", "state", "session", "accessToken", "X-Amz-Signature"]
 )
@@ -321,6 +534,10 @@ PRESERVED = [
     "https://www.google.com/search?q=home+server&start=10",
     "https://search.naver.com/search.naver?where=nexearch&query=%ED%99%88%EC%84%9C%EB%B2%84",
     "https://gall.dcinside.com/board/view/?id=programming&no=2940536",
+    "https://example.com/?manage_code=MA01",
+    "https://example.com/?sort_key=date",
+    "https://example.com/?session_type=live",
+    "https://example.com/?stateName=seoul",
 ]
 
 
@@ -346,6 +563,8 @@ def test_reader_url_preserves_public_navigation(url):
         ("accessToken", "abc"),
         ("user-session-id", "abc"),
         ("apiKey", "abc"),
+        ("userPassword", "hunter2"),
+        ("client_secret", "abc"),
     ],
 )
 def test_reader_url_redacts_secrets(key, value):

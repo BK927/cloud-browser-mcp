@@ -12,6 +12,7 @@ from .approval import PASSIVE_ACTIONS
 from .authentication import MANUAL_METHODS
 from .config import Settings
 from .models import BrowserError, ObservationQuery, response
+from .navigation_pacing import NavigationPacer
 from .operation_diagnostics import log_capacity
 from .ownership import check_ownership, durable_owner, new_ownership
 from .resources import admission_state, memory_state
@@ -51,6 +52,7 @@ class BrowserService:
         self.reader_tid = None
         self.reader_lock = asyncio.Lock()
         self.read_cache = {}
+        self.navigation_pacer = NavigationPacer(settings)
 
     def start(self):
         if self.sweeper is None:
@@ -105,6 +107,7 @@ class BrowserService:
 
     async def _reap_expired(self):
         self._expire_reads()
+        self.navigation_pacer.expire()
         if self._active_control():
             return  # Never disturb the shared private desktop, even after expiry.
         for sid, state in list(self.sessions.items()):
@@ -335,7 +338,7 @@ class BrowserService:
         Keep the entire serialized command alive when an HTTP waiter disappears;
         both worker reply correlation and execution-result recording must finish.
         """
-        context = {}
+        context = {"deadline": time.monotonic() + 5} if method in ("open", "navigate") else {}
         task = asyncio.create_task(
             self._call_owned(method, _principal, lease_id, operation_id, args, context)
         )
@@ -588,16 +591,15 @@ class BrowserService:
                 )
             return self._read_slice(read_id, item, offset, max_chars)
 
-        # Serialize reader pages, but let other works run between navigation probes.
-        async with self._command_lock_for_reader():
+        await self._validate_navigation_url(url)
+        # Pacing precedes both locks; loading still serializes only reader pages.
+        async with (
+            self.navigation_pacer.pace(url) as pacing,
+            self._command_lock_for_reader(),
+        ):
             try:
                 async with self._command_lock():
                     self._check_control(None)
-                    await asyncio.to_thread(
-                        validate_url,
-                        url,
-                        dns_proxy=self.cfg.browser_proxy if self.cfg.network_isolated else None,
-                    )
                     await self._reap_expired()
                     if self.reader_sid not in self.sessions:
                         if len(self.sessions) >= self.cfg.max_sessions:
@@ -634,6 +636,7 @@ class BrowserService:
                         "goto",
                         url,
                         int(self.cfg.reader_timeout * 1000),
+                        pacing=pacing,
                     )
                     nav = self.navigations.get(sid)
                     if nav:
@@ -769,7 +772,9 @@ class BrowserService:
                 operation_id=nav["operation_id"],
             )
 
-    async def _begin_navigation(self, sid, tid, operation, url, timeout_ms, operation_id=None):
+    async def _begin_navigation(
+        self, sid, tid, operation, url, timeout_ms, operation_id=None, pacing=None
+    ):
         self._check_navigation(sid)
         result = await self._rpc(
             "navigation_begin",
@@ -779,6 +784,8 @@ class BrowserService:
             url=url,
             timeout_ms=timeout_ms,
         )
+        if pacing:
+            pacing()
         if not result.get("navigation", {}).get("pending"):
             return result
         op = operation_id or "nav_" + secrets.token_urlsafe(18)
@@ -957,8 +964,35 @@ class BrowserService:
         finally:
             self.lock.release()
 
+    async def _validate_navigation_url(self, url):
+        await asyncio.to_thread(
+            validate_url,
+            url,
+            dns_proxy=self.cfg.browser_proxy if self.cfg.network_isolated else None,
+        )
+
     async def _serialized_call(self, method, principal, lease_id, _context=None, **args):
-        async with self._command_lock():
+        self._check_control(args.get("session_id"))
+        url = None
+        if method == "open" or (method == "navigate" and args.get("operation") == "goto"):
+            url = args.get("url")
+            if method == "navigate" and not url:
+                raise BrowserError("INVALID_URL", "goto requires a URL")
+            if url:
+                await self._validate_navigation_url(url)
+        elif method == "navigate" and args.get("operation") == "reload":
+            url = next(
+                (
+                    tab.get("url")
+                    for tab in self.tab_cache.get(args.get("session_id"), {}).get("tabs", [])
+                    if tab["tab_id"] == args.get("tab_id")
+                ),
+                None,
+            )
+        async with (
+            self.navigation_pacer.pace(url, (_context or {}).get("deadline")) as pacing,
+            self._command_lock(),
+        ):
             sid, tid = args.get("session_id"), args.get("tab_id")
             before_sessions = set(self.sessions)
             try:
@@ -983,10 +1017,16 @@ class BrowserService:
                     await self._reap_expired()
                 self.running = (sid, method)
                 if method == "open":
-                    result = await self._open(**args, _context=_context, _principal=principal)
+                    result = await self._open(
+                        **args, _context=_context, _principal=principal, _pacing=pacing
+                    )
                 elif method == "navigate":
                     result = await self._navigate(
-                        **args, _context=_context, _principal=principal, _lease_id=lease_id
+                        **args,
+                        _context=_context,
+                        _principal=principal,
+                        _lease_id=lease_id,
+                        _pacing=pacing,
                     )
                 else:
                     result = await getattr(self, "_" + method)(**args)
@@ -1064,15 +1104,10 @@ class BrowserService:
         timeout_ms=None,
         _context=None,
         _principal=None,
+        _pacing=None,
     ):
         self._navigation_timeout(requested=timeout_ms)
         self._check_navigation(session_id)
-        if url:
-            await asyncio.to_thread(
-                validate_url,
-                url,
-                dns_proxy=self.cfg.browser_proxy if self.cfg.network_isolated else None,
-            )
         if (_context or {}).get("abandoned"):
             raise BrowserError(
                 "BROWSER_BUSY",
@@ -1146,6 +1181,7 @@ class BrowserService:
                 url,
                 self._navigation_timeout(session_id, result["tab_id"], timeout_ms),
                 operation_id=(_context or {}).get("operation_id"),
+                pacing=_pacing,
             )
         return result
 
@@ -1164,6 +1200,7 @@ class BrowserService:
         _context=None,
         _principal=None,
         _lease_id=None,
+        _pacing=None,
     ):
         self._session(session_id)
         self._check_control(session_id)
@@ -1181,6 +1218,7 @@ class BrowserService:
             url,
             budget,
             operation_id=(_context or {}).get("operation_id"),
+            pacing=_pacing,
         )
 
     async def _observe(self, session_id, tab_id, **options):
@@ -1882,6 +1920,8 @@ class BrowserService:
             "navigation_details": "document-identity-and-same-document-events-v1",
             "navigation_default_timeout_ms": int(self.cfg.navigation_timeout * 1000),
             "navigation_max_timeout_ms": int(self.cfg.navigation_max_timeout * 1000),
+            "navigation_min_interval_ms": self.cfg.navigation_min_interval_ms,
+            "navigation_per_host_per_minute": self.cfg.navigation_per_host_per_minute,
             "navigation_progress": "server-operation-id-browser-status",
             "navigation_poll_max_hz": 2,
             "duplicate_action_policy": "exact-session-tab-revision-action",

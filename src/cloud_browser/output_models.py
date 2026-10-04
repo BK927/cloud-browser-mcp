@@ -104,7 +104,7 @@ class Navigation(NavigationDetails):
     operation: Literal["goto", "back", "forward", "reload"] | None = None
     redirected: bool | None = None
     navigation_occurred: bool | None = None
-    pending: bool | None = Field(None, description="True is NOT load completion.")
+    pending: bool | None = Field(None, description="Not complete.")
     operation_id: str | None = None
     phase: (
         Literal[
@@ -432,6 +432,8 @@ class Capabilities(OutputModel):
     browser_timezone: str | None = None
     navigation_default_timeout_ms: int | None = None
     navigation_max_timeout_ms: int | None = None
+    navigation_min_interval_ms: int | None = None
+    navigation_per_host_per_minute: int | None = None
     navigation_progress: str | None = None
     navigation_poll_max_hz: int | None = None
 

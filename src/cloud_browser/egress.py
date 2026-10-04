@@ -6,15 +6,32 @@ No URL/header/body logging. No TLS interception.
 
 import asyncio
 import contextlib
+import ipaddress
 import os
 from urllib.parse import urlsplit
 
 from .security import DNS_CHECK_METHOD, DNS_POLICY_HEADER, DNS_POLICY_VERSION, public_addresses
 
+CONNECT_ATTEMPT_TIMEOUT = 5
+CONNECT_TIMEOUT = 15
+
 
 class EgressProxy:
-    def __init__(self):
+    def __init__(self, idle_timeout=120):
         self.slots = asyncio.Semaphore(64)
+        self.idle_timeout = idle_timeout
+
+    async def _connect(self, addresses, port):
+        # Stable family ordering of checked numeric addresses; never resolve again.
+        async with asyncio.timeout(CONNECT_TIMEOUT):
+            for address in sorted(addresses, key=lambda value: ipaddress.ip_address(value).version):
+                try:
+                    return await asyncio.wait_for(
+                        asyncio.open_connection(address, port), CONNECT_ATTEMPT_TIMEOUT
+                    )
+                except (OSError, TimeoutError):
+                    continue
+        raise OSError("No validated destination is reachable")
 
     async def handle(self, client_reader, client_writer):
         upstream_writer = None
@@ -67,10 +84,7 @@ class EgressProxy:
                     )
                     await client_writer.drain()
                     return
-                # Connect to this checked numeric address; never resolve the name again.
-                upstream_reader, upstream_writer = await asyncio.wait_for(
-                    asyncio.open_connection(addresses[0], port), 15
-                )
+                upstream_reader, upstream_writer = await self._connect(addresses, port)
                 if tunnel:
                     client_writer.write(b"HTTP/1.1 200 Connection Established\r\n\r\n")
                 else:
@@ -100,14 +114,28 @@ class EgressProxy:
                     await upstream_writer.drain()
                 await client_writer.drain()
 
+                loop = asyncio.get_running_loop()
+                last_activity = loop.time()
+
                 async def pump(reader, writer):
-                    while chunk := await asyncio.wait_for(reader.read(65536), 120):
+                    nonlocal last_activity
+                    while chunk := await reader.read(65536):
                         writer.write(chunk)
+                        last_activity = loop.time()
                         await writer.drain()
+                        last_activity = loop.time()
+
+                async def idle():
+                    while True:
+                        remaining = self.idle_timeout - (loop.time() - last_activity)
+                        if remaining <= 0:
+                            return
+                        await asyncio.sleep(remaining)
 
                 tasks = [
                     asyncio.create_task(pump(client_reader, upstream_writer)),
                     asyncio.create_task(pump(upstream_reader, client_writer)),
+                    asyncio.create_task(idle()),
                 ]
                 try:
                     await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)

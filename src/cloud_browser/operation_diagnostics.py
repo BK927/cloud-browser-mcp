@@ -18,7 +18,13 @@ _codes = {
     "USER_CONTROL_ACTIVE",
     "AUTH_IN_PROGRESS",
 }
-_reasons = {"session_capacity", "queue_capacity", "queue_timeout", "user_control"}
+_reasons = {
+    "session_capacity",
+    "queue_capacity",
+    "queue_timeout",
+    "user_control",
+    "host_rate_limit",
+}
 
 
 def log_capacity(result):

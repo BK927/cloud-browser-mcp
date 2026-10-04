@@ -60,40 +60,46 @@ def redact_tree(value):
 
 def reader_safe_url(url: str) -> str:
     """Preserve public navigation parameters while withholding authentication values."""
-    secret_keys = {
+    whole_secret_keys = {
+        "code",
+        "state",
+        "key",
+        "sig",
+        "sid",
+        "auth",
+        "session",
+        "sess",
+        "nonce",
+        "ticket",
+        "assertion",
+        "credential",
+        "credentials",
+    }
+    part_secret_keys = {
         "token",
         "access_token",
         "refresh_token",
         "id_token",
-        "auth",
         "authorization",
-        "code",
-        "state",
-        "nonce",
-        "session",
-        "sess",
         "sessionid",
-        "sid",
         "password",
         "passwd",
         "pwd",
         "secret",
         "signature",
-        "sig",
-        "key",
         "apikey",
         "api_key",
-        "credential",
-        "credentials",
-        "ticket",
         "otp",
         "jwt",
         "saml",
         "samlresponse",
-        "assertion",
         "x_amz_signature",
         "x_amz_credential",
         "x_amz_security_token",
+    }
+    compound_secret_keys = {key for key in part_secret_keys if "_" in key} | {
+        "session_id",
+        "saml_response",
     }
     try:
         p = urlsplit(url)
@@ -106,7 +112,12 @@ def reader_safe_url(url: str) -> str:
         def public_value(key, value):
             separated = re.sub(r"([a-z0-9])([A-Z])", r"\1_\2", key)
             parts = re.split(r"[^a-z0-9]+", separated.casefold())
-            secret_key = "_".join(parts) in secret_keys or any(p in secret_keys for p in parts)
+            normalized = "_".join(parts)
+            secret_key = (
+                normalized in whole_secret_keys
+                or any(part in part_secret_keys for part in parts)
+                or any(f"_{key}_" in f"_{normalized}_" for key in compound_secret_keys)
+            )
             if (
                 (secret_key and not re.fullmatch(r"[0-9]{1,6}", value))
                 or TOKEN.search(value)

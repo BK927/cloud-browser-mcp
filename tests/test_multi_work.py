@@ -203,3 +203,27 @@ def test_capacity_logs_are_bounded_correlated_and_payload_free(monkeypatch):
     assert "secret" not in str(logger.info.call_args_list)
     assert "req_fixture" in str(logger.info.call_args_list)
     diag._events.clear()
+
+
+def test_host_rate_limit_logs_only_recognized_reason(monkeypatch):
+    from cloud_browser import operation_diagnostics as diag
+
+    logger = Mock()
+    monkeypatch.setattr(diag, "_logger", logger)
+    diag._events.clear()
+    diag.log_capacity(
+        {
+            "request_id": "req_fixture",
+            "error": {"code": "BROWSER_BUSY", "message": "example.com secret"},
+            "busy_reason": "host_rate_limit",
+            "host": "example.com",
+        }
+    )
+    payload = json.loads(logger.info.call_args.args[0])
+    assert payload == {
+        "event": "browser_capacity",
+        "request_id": "req_fixture",
+        "code": "BROWSER_BUSY",
+        "reason": "host_rate_limit",
+    }
+    diag._events.clear()

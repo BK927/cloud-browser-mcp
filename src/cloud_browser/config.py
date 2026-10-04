@@ -52,6 +52,8 @@ class Settings(BaseSettings):
     node_registry_bytes: int = Field(2 * 1024 * 1024, ge=64 * 1024, le=16 * 1024 * 1024)
     navigation_timeout: float = Field(60, ge=1, le=300)
     navigation_max_timeout: float = Field(300, ge=1, le=300)
+    navigation_min_interval_ms: int = Field(1500, ge=0, le=60000)
+    navigation_per_host_per_minute: int = Field(30, ge=1, le=600)
     reader_enabled: bool = True
     reader_idle_ttl: int = Field(300, ge=60, le=3600)
     reader_timeout: float = Field(25, ge=5, le=40)
