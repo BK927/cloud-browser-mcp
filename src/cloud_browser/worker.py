@@ -13,8 +13,6 @@ from .models import BrowserError
 
 
 def worker_main(connection, configuration):
-    from .drission import DrissionAdapter
-
     adapter = None
 
     def stop(signum, frame):
@@ -30,7 +28,15 @@ def worker_main(connection, configuration):
             try:
                 if adapter is None:
                     try:
-                        adapter = DrissionAdapter(Settings(**configuration))
+                        settings = Settings(**configuration)
+                        if settings.engine == "wpe":
+                            from .wpe import WPEAdapter
+
+                            adapter = WPEAdapter(settings)
+                        else:
+                            from .drission import DrissionAdapter
+
+                            adapter = DrissionAdapter(settings)
                     except ImportError as exc:
                         raise BrowserError(
                             "ENGINE_UNAVAILABLE",

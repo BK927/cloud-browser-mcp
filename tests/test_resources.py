@@ -189,7 +189,12 @@ def test_admission_compares_bytes_before_rounding(cgroup, monkeypatch):
     assert resources.memory_state(256)["can_admit"] is False
 
 
-async def test_observe_admission_uses_cache_estimate_without_bypassing_pressure(service, cgroup):
+async def test_observe_admission_uses_cache_estimate_without_bypassing_pressure(
+    service, cgroup, monkeypatch
+):
+    # Unlike ordinary fake-worker tests, use the real sampler against this
+    # fixture's controlled cgroup/host counters, never the host's live load.
+    monkeypatch.setattr(service, "resources", type(service).resources.__get__(service))
     opened = await service.call("open")
     assert opened["status"] == "ok"
     args = {key: opened[key] for key in ("session_id", "tab_id")}
@@ -200,10 +205,12 @@ async def test_observe_admission_uses_cache_estimate_without_bypassing_pressure(
     assert limited["status"] == "ok"
     assert limited["observation"]["resource_limited"] is True
     assert len(service.worker.calls) == calls + 1
-    # Adaptive policy permits a small viewport capture, but not a full-page peak.
+    # The fake worker returns a one-pixel image. Capture admission belongs to
+    # the worker's actual dimensions, not a full-page worst-case service guess.
     assert (await service.call("observe", **args, mode="visual"))["status"] == "ok"
-    blocked = await service.call("observe", **args, mode="visual", full_page=True)
-    assert blocked["error"]["code"] == "RESOURCE_PRESSURE"
+    full = await service.call("observe", **args, mode="visual", full_page=True)
+    assert full["status"] == "ok"
+    assert service.worker.calls[-1][1]["full_page"] is True
     # Pressure does not prevent explicit cleanup or silently expire the tab.
     assert (await service.call("list_tabs", session_id=opened["session_id"]))["tabs"]
     assert (await service.call("close", session_id=opened["session_id"], scope="session"))[

@@ -61,7 +61,9 @@ def paginate(snapshot: dict, offsets: tuple[int, int], budget: int) -> tuple[dic
     rows = []
     used = 0
     reserve = budget if so >= len(semantic) else budget // 2
-    first = _line(nodes[ni], budget) if ni < len(nodes) else None
+    # A large first control must not consume the text's entire output budget.
+    # Interactive-only pages still retain the full per-row budget.
+    first = _line(nodes[ni], reserve) if ni < len(nodes) else None
     if first is not None:
         # Guarantee progress even when the first row exceeds the nominal share.
         rows.append(first)

@@ -83,6 +83,20 @@ class FakeWorker:
         self.sessions.clear()
 
 
+def fake_worker_resources(admission=0):
+    """A fake worker does not allocate browser RAM; isolate unrelated host load.
+
+    Admission tests replace this explicitly with controlled resource samples or
+    restore BrowserService.resources to exercise the actual accounting path.
+    """
+    return {
+        "available_mb": 4096,
+        "host_available_mb": 4096,
+        "can_admit": True,
+        "memory_pressure": {"some": 0, "full": 0},
+    }
+
+
 @pytest.fixture
 def cfg(tmp_path):
     return Settings(
@@ -100,5 +114,6 @@ def cfg(tmp_path):
 def service(cfg):
     store = Store(cfg.data_dir / "test.sqlite3")
     instance = BrowserService(cfg, store, FakeWorker())
+    instance.resources = fake_worker_resources
     yield instance
     store.close()

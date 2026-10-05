@@ -38,7 +38,8 @@ URL이 같더라도 문서가 교체되면 탐색이며, `reload`는 명시적 r
 비조작 요소도 조회할 수 있습니다. role은 정확히 일치해야 하고 name/label은
 공백 정규화·대소문자 무시 부분 일치입니다. Chromium AX 보강은 제한된 개수만
 수행하며 나머지는 native DOM 역할·레이블을 사용하고 `dom-fallback`으로 표시합니다.
-완전한 ARIA 이름 계산이나 모든 shadow DOM 질의를 보장하지 않습니다.
+open/nested Shadow DOM과 slot의 composed tree를 예산 안에서 탐색합니다.
+완전한 ARIA 이름 계산이나 closed Shadow DOM 지원은 보장하지 않습니다.
 쿼리 검사 예산을 초과하면 `query_scan_truncated`와 `interactive_truncated`가 true입니다.
 `wait`의 present/absent는 숨겨진 요소를 포함한 DOM 존재 여부이고,
 visible/hidden은 렌더링 여부(뷰포트 밖도 포함), enabled는 렌더링된 비활성 아님을 뜻합니다.
@@ -144,11 +145,31 @@ ID를 유지합니다. 대상 교체는 `STALE_NODE`, 이전 문서의 revision�
 마지막 탭을 닫으면 `session_closed: true`, `termination_reason: last_tab_closed`를 반환하며
 후속 호출은 `SESSION_CLOSED`입니다. 정상 종료를 브라우저 크래시로 보고하지 않습니다.
 
+발급 노드 저장소는 이번 조회 결과와 분리됩니다. 좁은 조회가 다른 살아 있는 노드 ID를
+폐기하지 않으며, 행동 직전에 같은 backend를 isolated world에서 재검증합니다.
+작업 전체 탭·프레임의 primitive 메타데이터는 기본 2MiB/1024건 LRU로 제한합니다.
+`CB_NODE_REGISTRY_BYTES`는 직렬화 메타데이터 예산이지 프로세스 RSS 상한이 아닙니다.
+예산으로 폐기된 ID는 `STALE_NODE`와 `reason: registry_evicted`이며 다른 요소로 대체하지 않습니다.
+폐기 이유 이력도 최근 256개로 제한합니다. 이력 밖의 오래된 ID는 여전히 `STALE_NODE`지만
+세부 이유는 `target_unavailable`일 수 있습니다.
+로그인·수동 제어 전환은 부분 조회와 달리 해당 작업의 모든 이전 노드·좌표·커서를
+무효화하고 승인 세대도 갱신합니다. 이미 실행한 행동의 중복 방지 기록은 지우지 않습니다.
+
 semantic은 화면에 렌더링된 DOM을 문서 순서로 읽으며 main/article을 우선합니다.
 제목·목록·표의 간단한 구조를 보존하고 메뉴/푸터와 접근성 트리의 중복을 줄입니다.
 `semantic_source`는 선택한 본문 종류, `semantic_source_truncated`는 내부 수집 한도 도달을
 표시합니다. 본문 내부 한도는 250000자/탐색 노드 10000개이며, 이 한도 초과 부분은 cursor로
 복원되지 않습니다. 이는 원문 전체 보존이나 모든 웹사이트의 완벽한 본문 추출을 보장하지 않습니다.
+
+메모리 압박에서도 `auto`는 최신의 짧은 본문과 요소를 함께 반환합니다(출력 최대 4000자,
+본문 수집 8000자/1000 탐색 노드). 실제 캡처 직전 worker가 폭·높이와 현재 자원을 검사하며
+이미지 거절은 `auto`의 텍스트를 버리지 않습니다. `screenshot_omitted`는 이유와 가능한
+자원 상태를 표시합니다. 명시적 `visual` 요청은 정확한 오류를 반환합니다.
+`observation_revision`은 텍스트 관찰 시점이며 선택적 캡처 검사 후 응답 revision은 더 최신일 수 있습니다.
+촬영 중 revision이 바뀌면 이전 continuation은 반환하지 않고, 잘린 본문은
+`pagination_stale=true`로 새 관찰이 필요함을 표시합니다.
+`query_match_count`와 `query_empty_reason`은 일치 대상 수와 missing/hidden/protected/empty/scan_budget을
+구분합니다. 내부 수집 제한과 wire 출력 잘림/커서는 서로 다른 제한입니다.
 
 interactive는 현재 viewport의 조작 요소를 담은 **완전한 JSON Lines**입니다. 빈 기본값을
 생략하고 좌표를 반올림하지만 실제 조작 대상은 기존 backend ID를 사용합니다. 최대 300개이며
@@ -157,7 +178,8 @@ viewport의 후보가 더 많으면 `interactive_truncated=true`입니다. 화�
 
 관찰된 backend ID에 대해서만 Chromium 접근성 정보를 조회해 이름·역할·상태를 보완합니다.
 관련 없는 AX 하위 트리나 입력값은 병합하지 않으며 보호된 입력 화면에서는 AX 조회를 하지
-않습니다. `accessibility_source`는 `chromium-ax` 또는 `dom-fallback`이며 후자는 경고도
+않습니다. 알려진 보호 영역이 있으면 AX 보강을 중단하고 개인정보를 제외한 DOM만 사용합니다.
+`accessibility_source`는 `chromium-ax`, `dom-fallback`, `withheld`이며 DOM fallback은 경고도
 반환합니다. 변경 없는 DOM에서는 AX 이름을 재사용합니다.
 
 select 노드는 최대 200개 option의 label/value/selected/disabled를 제공합니다. 초과는
@@ -167,13 +189,15 @@ NODE_AMBIGUOUS입니다. readonly 입력·radio 직접 해제는 명시적으로
 중첩 option 메타데이터에도 토큰 제거를 적용합니다.
 
 일반 overflow 스크롤 영역에도 node_id와 scrollable/scroll 정보를 부여합니다. 후보 탐색은
-30000개 요소로 제한하고 초과하면 `scroll_scan_truncated=true`입니다. 영역 내부 스크롤도
+10000개 요소(압박 모드 1000개)로 제한하고 초과하면 `scroll_scan_truncated=true`입니다. 영역 내부 스크롤도
 revision에 반영합니다. Shadow DOM의 완전한 탐색은 아직 보장하지 않습니다.
 
 max_chars는 두 snapshot 문자열의 합산 예산입니다. auto는 조작 목록에 예산을 먼저
 확보하므로 긴 본문 때문에 버튼이 전부 밀려나지 않습니다. 각 interactive 행은 독립적으로
 JSON 파싱할 수 있습니다. 너무 긴 행은 설명 일부를 생략하고 `details_omitted=true`를
 반환하지만 node_id는 유지합니다. 원래의 대상 메타데이터는 서버에서 그대로 검증합니다.
+본문이 남아 있으면 첫 조작 행도 분할 예산에 맞춰 요약해, 긴 select 메타데이터 하나로
+공개 본문이 전부 빠지지 않게 합니다. interactive-only 조회의 예산은 줄이지 않습니다.
 `semantic_truncated`와 `interactive_page_truncated`는 각각 다음 페이지의 존재를 표시합니다.
 
 cursor는 고정 snapshot·두 문자열의 위치·mode·예산·revision에 묶입니다. 같은 cursor를
@@ -186,6 +210,9 @@ mode/예산을 유지하고 이미지는 다시 생성하지 않습니다.
 연결하며 frame_id가 있는 노드의 rect는 해당 프레임 viewport CSS 좌표입니다.
 노드 조작은 부모 프레임 경계를 투영하고 가림을 검사합니다. 프레임 교체·이동·분리 시
 이전 노드는 재검색하지 않습니다. 읽지 못한 프레임은 부분 결과와 이유를 반환합니다.
+보호 폼 안의 프레임은 자체 입력 필드가 없더라도 `PROTECTED_PARENT`로 내용을 수집하지
+않습니다. 읽기 불가가 된 프레임의 이전 노드와 범위 조회도 거절합니다. 프레임의 경계·가림은
+실제 backend를 isolated world에서 검사하며 페이지의 전역 함수 변조를 사용하지 않습니다.
 
 URL은 최종 목적지를 사용하되 userinfo와 비밀값을 마스킹합니다. 일반 검색·탐색 query 및
 문서 fragment는 보존하고 알 수 없는 query 값과 인증 fragment는 가립니다. `page.url`은
@@ -252,14 +279,24 @@ WebMCP, passkey 전달, 인증 검증 지원 여부를 표시합니다. 지원 �
 - 외부 변경 여부가 불명확한 행동은 승인 대상이지만 범용 부작용 분석기는 아닙니다.
 - 파일 입력과 WebMCP는 [확장 계약](CONTRACT_EXTENSIONS.md)의 제한·승인 절차를 따릅니다.
   passkey/보안 키 전달은 제공하지 않습니다.
-- 인증/알려진 token 화면은 이미지 반환을 거부합니다. 기본 `CB_IFRAME_SCREENSHOT_POLICY=inspect`는
+- 명시적 인증 중에는 DOM·이미지·로그 수집을 중단합니다. 일반 페이지의 알려진 민감 필드와
+  소유 폼은 hidden 여부와 관계없이 값·노드·본문·폼 digest에서 제외하고 공개 영역을 읽습니다.
+  `protected_regions_omitted`가 이 분리를 표시합니다. 보수적인 보호 경계가 안전하면 이미지에서
+  가리고, 경계·합성이 불확실하면 이미지를 거절합니다. 보호 대상·폼 제출·현재 보호 영역의
+  좌표 조작은 거절합니다. 보호 영역이 있는 페이지의 subtree clipboard copy도 거절합니다.
+  DOM 20000개/입력 1000개 보안 검사 상한을 넘으면 `PRIVACY_INSPECTION_INCOMPLETE`이며
+  이를 실제 로그인 요구로 가장하지 않습니다. 임의 HTML/canvas에 복제된 비밀값까지 찾지는 못합니다.
+- 알려진 token 화면은 이미지 반환을 거부합니다. 기본 `CB_IFRAME_SCREENSHOT_POLICY=inspect`는
   검사 가능한 일반 프레임을 표시하고 민감·검사 불가 영역만 마스킹합니다.
 - 운영자 설정 `mask`는 모든 iframe/object/embed 영역을, `block`은 전체 프레임 캡처를
   차단합니다. 마스킹 위치에 transform/filter 등 지원하지 않는 합성이 있으면 캡처를
   거절합니다. 안전하게 위치를 확인한 full_page 마스킹은 허용하며 가린 영역 조작은 거부합니다.
   일반 캡처는 JPEG이고, 마스킹은 시각 정보를 제거하는 제한적 선택 기능이지 임의 비밀값 탐지나
   사이트 스크립트의 정보 유출 방지를 보장하지 않습니다. MCP configure로 정책을 완화할 수 없습니다.
-- CAPTCHA/BOT 차단은 명확한 화면 문구를 증거로 구분합니다. 단순 HTTP 403/429나
+- 숨김·현재 캡처 밖 일반 프레임은 inventory에 남겨도 캡처를 불필요하게 막지 않습니다.
+  위험한 합성이 캡처 안으로 그릴 가능성을 배제할 수 없으면 여전히 거절합니다.
+- CAPTCHA/BOT 차단은 보이는 도전 컨트롤·제공자 프레임·차단 패널과 화면 맥락으로 구분합니다.
+  기사에서 관련 문구를 인용하는 것만으로 차단하지 않습니다. 단순 HTTP 403/429나
   timeout만으로 BOT_BLOCKED를 반환하지 않습니다. 우회·자동 반복 새로고침은 없습니다.
 
 ## 추가 오류
@@ -269,6 +306,11 @@ SENSITIVE_INPUT, NODE_NOT_ACTIONABLE, INVALID_COORDINATES, INVALID_INPUT,
 OBSERVATION_FAILED, UNSUPPORTED_OPERATION, ENGINE_UNAVAILABLE, RESOURCE_PRESSURE, WORKER_TIMEOUT,
 BROWSER_ERROR, CONFIRMATION_USED, CONFIRMATION_DENIED, AUTH_IN_PROGRESS, AUTH_ORIGIN_MISMATCH,
 USER_CONTROL_ACTIVE, HANDOFF_UNAVAILABLE, HANDOFF_NOT_FOUND를 사용합니다.
+ACTION_GOAL_NOT_MET, SENSITIVE_TARGET, PRIVACY_INSPECTION_INCOMPLETE도 사용합니다.
+입력·선택·체크는 같은 backend의 실제 목표 값을 확인하고 `target_state_verified`를 반환합니다.
+알려진 불일치는 ACTION_GOAL_NOT_MET, 확인 불가는 RESULT_UNCERTAIN이며 이미 전달한 행동을
+자동 재실행하지 않습니다. 명시적 completion 실패도 `ok`로 표시하지 않습니다.
+디시 게시글 HTTPS 경로의 숫자형 `no`는 공개 식별자로 보존하며 그 밖의 비밀성 URL 값은 제거합니다.
 CONTROL_DISCONNECT_FAILED는 원격 제어 연결을 안전하게 끊지 못한 경우입니다.
 좌표는 문서·viewport·스크롤·적중 요소·가림·의미를 재검증합니다. DOM 대상이 없으면
 엄격한 픽셀 일치 검사를 유지합니다. 일반 이미지 관찰은 동영상 픽셀 변화만으로 실패하지

@@ -23,6 +23,21 @@ KEYS = {
     "PAGEDOWN": ("PageDown", "PageDown", 34, None),
 }
 KEYS.update({c: (c.lower(), "Key" + c, ord(c), c.lower()) for c in "ABCDEFGHIJKLMNOPQRSTUVWXYZ"})
+_PUNCTUATION = {
+    " ": ("Space", 32),
+    "`": ("Backquote", 192),
+    "-": ("Minus", 189),
+    "=": ("Equal", 187),
+    "[": ("BracketLeft", 219),
+    "]": ("BracketRight", 221),
+    "\\": ("Backslash", 220),
+    ";": ("Semicolon", 186),
+    "'": ("Quote", 222),
+    ",": ("Comma", 188),
+    ".": ("Period", 190),
+    "/": ("Slash", 191),
+}
+_SHIFTED = dict(zip('~!@#$%^&*()_+{}|:"<>?', "`1234567890-=[]\\;',./", strict=True))
 
 
 class NativeInput:
@@ -56,6 +71,44 @@ class NativeInput:
         finally:
             self.tab.run_cdp("Input.dispatchKeyEvent", type="keyUp", **parameters, _timeout=1)
             self.held_key = None
+
+    def type_text(self, text, interval_ms=0):
+        """Printable ASCII key events; Unicode/control text uses explicit insertion.
+
+        Text insertion is not an IME composition sequence. Newline/tab insertion
+        must not silently become Enter/Tab activation on an ordinary edit action.
+        """
+        for character in text:
+            shift = character in _SHIFTED or character.isascii() and character.isupper()
+            base = _SHIFTED.get(character, character.lower())
+            if base.isascii() and base.isalpha() and len(base) == 1:
+                code, virtual = "Key" + base.upper(), ord(base.upper())
+            elif base.isascii() and base.isdigit():
+                code, virtual = "Digit" + base, ord(base)
+            elif base in _PUNCTUATION:
+                code, virtual = _PUNCTUATION[base]
+            else:
+                self.tab.run_cdp("Input.insertText", text=character)
+                if interval_ms:
+                    time.sleep(interval_ms / 1000)
+                continue
+            parameters = dict(
+                key=character,
+                code=code,
+                windowsVirtualKeyCode=virtual,
+                modifiers=MODIFIERS["SHIFT"] if shift else 0,
+            )
+            self.held_key = parameters
+            try:
+                self.tab.run_cdp("Input.dispatchKeyEvent", type="rawKeyDown", **parameters)
+                self.tab.run_cdp(
+                    "Input.dispatchKeyEvent", type="char", text=character, **parameters
+                )
+            finally:
+                self.tab.run_cdp("Input.dispatchKeyEvent", type="keyUp", **parameters, _timeout=1)
+                self.held_key = None
+            if interval_ms:
+                time.sleep(interval_ms / 1000)
 
     def mouse(self, event, x, y, *, button="left", count=1, modifiers=()):
         self.point = (x, y)

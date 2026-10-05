@@ -125,6 +125,9 @@ See [Docker deployment](docs/DEPLOYMENT.md),
 [validation](docs/VALIDATION.md) for the complete checklist. For Docker-free
 Debian installation, use the [native systemd guide](docs/NATIVE_INSTALL.md).
 
+An opt-in, loopback-only [WPE single-tab preview](docs/WPE_SINGLE_TAB_PREVIEW.md)
+is also available for development. It is not a production browser replacement.
+
 ## Architecture
 
 ```text

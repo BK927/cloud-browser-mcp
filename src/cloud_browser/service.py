@@ -44,6 +44,7 @@ class BrowserService:
         self.running = None
         self.sweeper = None
         self.cleanup_required = False
+        self.navigations = {}
 
     def start(self):
         if self.sweeper is None:
@@ -69,6 +70,17 @@ class BrowserService:
             self.sessions[sid].update(expires=now + self.cfg.session_ttl, last_activity=now)
 
     def _forget(self, sid, state, reason):
+        nav = self.navigations.get(sid)
+        if nav:
+            self._finish_navigation(
+                sid,
+                nav,
+                self._error_response(
+                    BrowserError("NAVIGATION_CANCELLED", "Work closed during navigation"),
+                    sid,
+                    nav["tab_id"],
+                ),
+            )
         self._remember_session(sid, state, reason)
         self.sessions.pop(sid, None)
         self.leases.pop(sid, None)
@@ -88,6 +100,7 @@ class BrowserService:
             if (
                 state["expires"] > time.time()
                 or self.queued.get(sid)
+                or sid in self.navigations
                 or (self.running and self.running[0] == sid)
             ):
                 continue
@@ -269,7 +282,23 @@ class BrowserService:
             await asyncio.shield(self.worker.shutdown())
             raise
         except BrowserError as exc:
-            if exc.code in ("SESSION_EXPIRED", "WORKER_TIMEOUT"):
+            if exc.code == "SESSION_EXPIRED" and exc.details.get("failure_scope") == "session":
+                sid = args.get("session_id")
+                if sid in self.sessions:
+                    self._forget(sid, "expired", "browser_disconnected")
+                # Only this browser process disappeared; the IPC worker and
+                # other isolated works remain valid and are not restarted.
+            elif exc.code in ("SESSION_EXPIRED", "WORKER_TIMEOUT"):
+                for nav_sid, nav in list(self.navigations.items()):
+                    self._finish_navigation(
+                        nav_sid,
+                        nav,
+                        self._error_response(
+                            BrowserError(exc.code, "Navigation interrupted by worker failure"),
+                            nav_sid,
+                            nav["tab_id"],
+                        ),
+                    )
                 for sid in list(self.sessions):
                     self._remember_session(sid, "expired", exc.code.lower())
                 self.sessions.clear()
@@ -289,16 +318,35 @@ class BrowserService:
         Keep the entire serialized command alive when an HTTP waiter disappears;
         both worker reply correlation and execution-result recording must finish.
         """
+        context = {}
         task = asyncio.create_task(
-            self._call_owned(method, _principal, lease_id, operation_id, args)
+            self._call_owned(method, _principal, lease_id, operation_id, args, context)
         )
         self.tasks.add(task)
         task.add_done_callback(self.tasks.discard)
         # Retrieve exceptions even if the HTTP client has gone away.
         task.add_done_callback(lambda t: t.exception() if not t.cancelled() else None)
-        return await asyncio.shield(task)
+        if method not in ("open", "navigate") or self.cfg.engine != "chromium":
+            return await asyncio.shield(task)
+        try:
+            return await asyncio.wait_for(asyncio.shield(task), 5)
+        except TimeoutError:
+            if context.get("result"):
+                return context["result"]
+            # Still queued or validating: abandon before dispatch, without
+            # cancelling cleanup/IPC and invalidating another work's browser.
+            context["abandoned"] = True
+            return self._error_response(
+                BrowserError(
+                    "BROWSER_BUSY",
+                    "Navigation was not dispatched within the initial response budget; poll status",
+                    busy_reason="queue_timeout",
+                )
+            )
 
-    async def _call_owned(self, method, principal, lease_id, operation_id, args):
+    async def _call_owned(self, method, principal, lease_id, operation_id, args, context=None):
+        context = context if context is not None else {}
+        call_started = time.monotonic()
         sid = args.get("session_id")
         key = None
         created_operation = False
@@ -357,7 +405,10 @@ class BrowserService:
                     )
                 if record["state"] == "completed":
                     return record["result"] | {"replayed": True}
-                return response("no_change", operation=self._operation_output(record))
+                return record.get(
+                    "progress_result",
+                    response("no_change", operation=self._operation_output(record)),
+                ) | {"replayed": True}
             if len(self.tasks) > 32 or self.queued.get(sid, 0) >= self.cfg.max_queued_per_work:
                 raise BrowserError(
                     "BROWSER_BUSY",
@@ -365,6 +416,10 @@ class BrowserService:
                     busy_reason="queue_capacity",
                     retry_after_seconds=2,
                 )
+            needed = int(bool(key)) + int(
+                self.cfg.engine == "chromium" and method in ("open", "navigate")
+            )
+            self._reserve_operations(needed)
             if key:
                 # Bound result memory; never evict running commands.
                 for old_key in list(self.operations):
@@ -378,15 +433,52 @@ class BrowserService:
                 created_operation = True
             self.queued[sid] = self.queued.get(sid, 0) + 1
             try:
-                result = await self._serialized_call(method, principal, lease_id, **args)
+                result = await self._serialized_call(
+                    method, principal, lease_id, _context=context, **args
+                )
             finally:
                 self.queued[sid] -= 1
                 if not self.queued[sid]:
                     del self.queued[sid]
+            navigation = result.get("navigation", {})
+            context["result"] = result
+            if navigation.get("pending") and self.cfg.engine == "chromium":
+                nav_sid = result["session_id"]
+                nav = self.navigations[nav_sid]
+                nav.update(
+                    principal=principal, lease_id=result.get("lease_id", lease_id), result=result
+                )
+                nav_key = (principal, nav["lease_id"], nav["operation_id"])
+                if key:
+                    nav["keys"].add(key)
+                nav["keys"].add(nav_key)
+                for journal_key in nav["keys"]:
+                    self.operations[journal_key] = {
+                        "digest": digest,
+                        "state": "running",
+                        "progress_result": result,
+                    }
+                task = asyncio.create_task(self._drive_navigation(nav_sid, nav))
+                nav["task"] = task
+                self.tasks.add(task)
+                task.add_done_callback(self.tasks.discard)
+                task.add_done_callback(lambda t: t.exception() if not t.cancelled() else None)
+                try:
+                    await asyncio.wait_for(
+                        nav["done"].wait(),
+                        timeout=max(0.001, 5 - (time.monotonic() - call_started)),
+                    )
+                except TimeoutError:
+                    pass
+                return nav["result"]
             if key:
                 self.operations[key].update(
                     state="completed", result={k: v for k, v in result.items() if k != "_image"}
                 )
+                self.operations[key].pop("progress_result", None)
+            if context.get("key") in self.operations:
+                self.operations[context["key"]].update(state="completed", result=result)
+                self.operations[context["key"]].pop("progress_result", None)
             return result
         except BrowserError as exc:
             result = self._error_response(exc)
@@ -396,13 +488,150 @@ class BrowserService:
                 and self.operations[key]["state"] == "running"
             ):
                 self.operations[key].update(state="completed", result=result)
+                self.operations[key].pop("progress_result", None)
+            if context.get("key") in self.operations:
+                self.operations[context["key"]].update(state="completed", result=result)
+                self.operations[context["key"]].pop("progress_result", None)
+            context["result"] = result
             return result
 
     @staticmethod
     def _operation_output(record):
         if not record:
             return {"state": "not_found"}
-        return {k: v for k, v in record.items() if k != "digest"}
+        result = {k: v for k, v in record.items() if k not in ("digest", "progress_result")}
+        source = record.get("progress_result", record.get("result", {}))
+        if source.get("navigation"):
+            result["navigation"] = source["navigation"]
+        return result
+
+    def _reserve_operations(self, needed):
+        for key in list(self.operations):
+            if len(self.operations) + needed <= 128:
+                break
+            if self.operations[key]["state"] == "completed":
+                del self.operations[key]
+        if len(self.operations) + needed > 128:
+            raise BrowserError("BROWSER_BUSY", "Execution result budget is full")
+
+    def _navigation_timeout(self, sid=None, tid=None, requested=None):
+        value = (
+            requested
+            if requested is not None
+            else self.configurations.get(sid, {})
+            .get(tid, {})
+            .get("navigation_timeout_ms", int(self.cfg.navigation_timeout * 1000))
+        )
+        if type(value) is not int or not 1000 <= value <= self.cfg.navigation_max_timeout * 1000:
+            raise BrowserError(
+                "INVALID_INPUT", "timeout_ms must be 1000..operator navigation ceiling"
+            )
+        return value
+
+    def _check_navigation(self, sid, tid=None):
+        nav = self.navigations.get(sid)
+        if nav and (tid is None or tid == nav["tab_id"]):
+            raise BrowserError(
+                "NAVIGATION_IN_PROGRESS",
+                "Navigation is pending; poll browser_status instead of redispatching",
+                operation_id=nav["operation_id"],
+            )
+
+    async def _begin_navigation(self, sid, tid, operation, url, timeout_ms, operation_id=None):
+        self._check_navigation(sid)
+        result = await self._rpc(
+            "navigation_begin",
+            session_id=sid,
+            tab_id=tid,
+            operation=operation,
+            url=url,
+            timeout_ms=timeout_ms,
+        )
+        if not result.get("navigation", {}).get("pending"):
+            return result
+        op = operation_id or "nav_" + secrets.token_urlsafe(18)
+        result["navigation"]["operation_id"] = op
+        result["operation_id"] = op
+        result.setdefault("notices", []).append(
+            "Navigation pending is not a completed load; poll browser_status with this lease and operation_id"
+        )
+        self.navigations[sid] = {
+            "tab_id": tid,
+            "operation_id": op,
+            "result": result,
+            "keys": set(),
+            "done": asyncio.Event(),
+            "started": time.monotonic(),
+            "timeout_ms": timeout_ms,
+        }
+        return result
+
+    def _finish_navigation(self, sid, nav, result):
+        nav["result"] = result | {"operation_id": nav["operation_id"]}
+        for key in nav["keys"]:
+            if key in self.operations:
+                self.operations[key].update(state="completed", result=nav["result"])
+                self.operations[key].pop("progress_result", None)
+        if self.navigations.get(sid) is nav:
+            self.navigations.pop(sid)
+        nav["done"].set()
+
+    async def _drive_navigation(self, sid, nav):
+        try:
+            while not nav["done"].is_set():
+                await asyncio.sleep(0.5)
+                async with self._command_lock():
+                    if nav["done"].is_set():
+                        break
+                    if self._active_control():
+                        continue  # Even readiness probes collect no DOM during private control.
+                    try:
+                        data = await self._rpc(
+                            "navigation_poll", session_id=sid, tab_id=nav["tab_id"]
+                        )
+                        result = response(**data)
+                    except BrowserError as exc:
+                        result = self._error_response(exc, sid, nav["tab_id"])
+                    result["operation_id"] = nav["operation_id"]
+                    if nav.get("lease_id"):
+                        result["lease_id"] = nav["lease_id"]
+                    if result.get("navigation", {}).get("pending"):
+                        result["navigation"]["operation_id"] = nav["operation_id"]
+                        result["notices"].append(
+                            "Navigation is pending; this is not load completion"
+                        )
+                        nav["result"] = result
+                        for key in nav["keys"]:
+                            if key in self.operations:
+                                self.operations[key]["progress_result"] = result
+                    else:
+                        # A final open result must retain its already issued lease.
+                        if nav.get("lease_id"):
+                            result["lease_id"] = nav["lease_id"]
+                        self._finish_navigation(sid, nav, result)
+        except BrowserError as exc:
+            self._finish_navigation(sid, nav, self._error_response(exc, sid, nav["tab_id"]))
+
+    async def _cancel_navigation(self, sid, tid=None):
+        nav = self.navigations.get(sid)
+        if nav and (tid is None or tid == nav["tab_id"]):
+            try:
+                await self._rpc("navigation_cancel", session_id=sid, tab_id=nav["tab_id"])
+            except BrowserError as exc:
+                if exc.code not in ("TAB_NOT_FOUND", "SESSION_EXPIRED"):
+                    raise
+            self._finish_navigation(
+                sid,
+                nav,
+                self._error_response(
+                    BrowserError(
+                        "NAVIGATION_CANCELLED",
+                        "Pending navigation cancelled for cleanup or private control",
+                    ),
+                    sid,
+                    nav["tab_id"],
+                ),
+            )
 
     @staticmethod
     def _error_response(exc, sid=None, tid=None):
@@ -419,6 +648,11 @@ class BrowserService:
             "LEASE_REQUIRED": "browser_open",
             "AUTH_REQUIRED": "browser_auth_request",
             "CAPTCHA_REQUIRED": "browser_handoff",
+            "PRIVACY_INSPECTION_INCOMPLETE": "browser_handoff",
+            "FRAME_UNAVAILABLE": "browser_observe",
+            "ACTION_GOAL_NOT_MET": "browser_observe",
+            "RESULT_UNCERTAIN": "browser_handoff",
+            "SENSITIVE_SCREEN": "browser_observe",
         }
         result = response(
             exc.status,
@@ -464,21 +698,43 @@ class BrowserService:
         finally:
             self.lock.release()
 
-    async def _serialized_call(self, method, principal, lease_id, **args):
+    async def _serialized_call(self, method, principal, lease_id, _context=None, **args):
         async with self._command_lock():
             sid, tid = args.get("session_id"), args.get("tab_id")
             before_sessions = set(self.sessions)
             try:
                 # Existing leases coexist; only one command touches the worker at a time.
                 self._check_control(sid)
+                if (_context or {}).get("abandoned"):
+                    raise BrowserError(
+                        "BROWSER_BUSY",
+                        "Initial request was abandoned before dispatch",
+                        busy_reason="queue_timeout",
+                    )
+                if method not in (
+                    "open",
+                    "navigate",
+                    "close",
+                    "handoff",
+                    "auth_request",
+                    "list_tabs",
+                ):
+                    self._check_navigation(sid, tid)
                 if method == "open" and not sid:
                     await self._reap_expired()
                 self.running = (sid, method)
-                result = await getattr(self, "_" + method)(**args)
+                if method == "open":
+                    result = await self._open(**args, _context=_context, _principal=principal)
+                elif method == "navigate":
+                    result = await self._navigate(
+                        **args, _context=_context, _principal=principal, _lease_id=lease_id
+                    )
+                else:
+                    result = await getattr(self, "_" + method)(**args)
                 self._touch(result.get("session_id", sid))
                 if method == "open" and principal is not None:
                     created_sid = result["session_id"]
-                    if not sid:
+                    if not sid and created_sid not in self.owners:
                         self.owners[created_sid] = new_ownership(principal)
                         self._remember_session(created_sid, "active", "opened")
                     result["lease_id"] = self.owners[created_sid]["lease_id"]
@@ -491,7 +747,7 @@ class BrowserService:
                     # Even a partial/failed open belongs to its caller, so it can
                     # inspect or close that exact work without global disclosure.
                     failed_sid = created.pop()
-                    self.owners[failed_sid] = new_ownership(principal)
+                    self.owners.setdefault(failed_sid, new_ownership(principal))
                     self._remember_session(failed_sid, "active", "open_failed")
                     return self._error_response(exc, failed_sid) | {
                         "lease_id": self.owners[failed_sid]["lease_id"]
@@ -500,18 +756,84 @@ class BrowserService:
             finally:
                 self.running = None
 
-    async def _open(self, session_id=None, url=None, new_tab=True):
+    def _provisional_navigation(
+        self, context, sid, tid, principal, lease_id, operation, timeout_ms
+    ):
+        if context is None or self.cfg.engine != "chromium":
+            return
+        if context.get("abandoned"):
+            raise BrowserError(
+                "BROWSER_BUSY",
+                "Initial request was abandoned before dispatch",
+                busy_reason="queue_timeout",
+            )
+        if context.get("result"):
+            return
+        self._reserve_operations(1)
+        op = "nav_" + secrets.token_urlsafe(18)
+        result = response(
+            "no_change",
+            session_id=sid,
+            tab_id=tid,
+            lease_id=lease_id,
+            operation_id=op,
+            navigation={
+                "operation": operation,
+                "pending": True,
+                "phase": "command_response",
+                "elapsed_ms": 0,
+                "timeout_ms": timeout_ms,
+                "operation_id": op,
+            },
+            notices=[
+                "Browser initialization/navigation is pending, not load completion; poll browser_status"
+            ],
+        )
+        key = (principal, lease_id, op)
+        context.update(result=result, operation_id=op, key=key)
+        self.operations[key] = {
+            "digest": "initialization",
+            "state": "running",
+            "progress_result": result,
+        }
+
+    async def _open(
+        self,
+        session_id=None,
+        url=None,
+        new_tab=True,
+        timeout_ms=None,
+        _context=None,
+        _principal=None,
+    ):
+        self._navigation_timeout(requested=timeout_ms)
+        self._check_navigation(session_id)
         if url:
             await asyncio.to_thread(
                 validate_url,
                 url,
                 dns_proxy=self.cfg.browser_proxy if self.cfg.network_isolated else None,
             )
+        if (_context or {}).get("abandoned"):
+            raise BrowserError(
+                "BROWSER_BUSY",
+                "Initial request was abandoned before dispatch",
+                busy_reason="queue_timeout",
+            )
         if session_id:
             self._session(session_id)
             self._check_control(session_id)
             if url:
                 self._check_uncertain(session_id)
+            self._provisional_navigation(
+                _context,
+                session_id,
+                None,
+                _principal,
+                self.owners.get(session_id, {}).get("lease_id"),
+                "goto",
+                self._navigation_timeout(requested=timeout_ms),
+            )
             if new_tab:
                 self._admit(self.cfg.memory_per_tab_mb, "new_tab")
             elif not (await self._rpc("list_tabs", session_id=session_id))["tabs"]:
@@ -532,13 +854,40 @@ class BrowserService:
                 "expires": time.time() + self.cfg.session_ttl,
                 "uncertain": False,
                 "last_activity": time.time(),
+                "approval_epoch": 0,
             }
+            if _principal is not None:
+                self.owners[session_id] = new_ownership(_principal)
+                self._remember_session(session_id, "active", "opening")
+        self._provisional_navigation(
+            _context,
+            session_id,
+            None,
+            _principal,
+            self.owners.get(session_id, {}).get("lease_id"),
+            "goto",
+            self._navigation_timeout(requested=timeout_ms),
+        )
         try:
-            result = await self._rpc("open", session_id=session_id, url=url, new_tab=new_tab)
+            result = await self._rpc(
+                "open",
+                session_id=session_id,
+                url=url if self.cfg.engine == "wpe" else None,
+                new_tab=new_tab,
+            )
         except BrowserError:
             # Preserve a possibly created session so status can diagnose it.
             raise
         result["expires_at"] = iso(self.sessions[session_id]["expires"])
+        if url and self.cfg.engine == "chromium":
+            result = await self._begin_navigation(
+                session_id,
+                result["tab_id"],
+                "goto",
+                url,
+                self._navigation_timeout(session_id, result["tab_id"], timeout_ms),
+                operation_id=(_context or {}).get("operation_id"),
+            )
         return result
 
     async def _list_tabs(self, session_id):
@@ -546,13 +895,37 @@ class BrowserService:
         self._check_control(session_id, observation=True)
         return await self._rpc("list_tabs", session_id=session_id)
 
-    async def _navigate(self, session_id, tab_id, operation, url=None):
+    async def _navigate(
+        self,
+        session_id,
+        tab_id,
+        operation,
+        url=None,
+        timeout_ms=None,
+        _context=None,
+        _principal=None,
+        _lease_id=None,
+    ):
         self._session(session_id)
         self._check_control(session_id)
         self._check_uncertain(session_id)
+        budget = self._navigation_timeout(session_id, tab_id, timeout_ms)
+        self._check_navigation(session_id)
         self._admit(64, "navigation")
-        return await self._rpc(
-            "navigate", session_id=session_id, tab_id=tab_id, operation=operation, url=url
+        self._provisional_navigation(
+            _context, session_id, tab_id, _principal, _lease_id, operation, budget
+        )
+        if self.cfg.engine == "wpe":
+            return await self._rpc(
+                "navigate", session_id=session_id, tab_id=tab_id, operation=operation, url=url
+            )
+        return await self._begin_navigation(
+            session_id,
+            tab_id,
+            operation,
+            url,
+            budget,
+            operation_id=(_context or {}).get("operation_id"),
         )
 
     async def _observe(self, session_id, tab_id, **options):
@@ -561,23 +934,14 @@ class BrowserService:
         resources = self.resources()
         text_budget = admission_state(resources, self.cfg, cost_mb=32, operation="observation")
         constrained = not text_budget["can_admit"] or text_budget["pressure_level"] != "normal"
-        if options.get("mode", "auto") == "auto":
-            cost = self._capture_cost(session_id, tab_id, options.get("full_page", False))
-            capture = admission_state(resources, self.cfg, cost_mb=cost, operation="capture")
-            constrained = constrained or not capture["can_admit"]
-        if options.get("mode") == "visual":
-            self._admit(
-                self._capture_cost(session_id, tab_id, options.get("full_page", False)), "capture"
-            )
-            constrained = False
+        # The worker admits capture immediately before collecting pixels, using
+        # actual page dimensions. A possible image must not suppress fresh text.
         if constrained:
             options.update(max_chars=min(options.get("max_chars") or 4000, 4000), lightweight=True)
-            if options.get("mode", "auto") == "auto":
-                options["mode"] = "interactive"
         result = await self._rpc("observe", session_id=session_id, tab_id=tab_id, **options)
         if constrained:
             result.setdefault("notices", []).append(
-                "RESOURCE_PRESSURE: bounded fresh observation; capture and broad scanning omitted"
+                "RESOURCE_PRESSURE: bounded fresh observation; broad scanning reduced"
             )
             result["observation"]["resource_limited"] = True
         return result
@@ -595,6 +959,8 @@ class BrowserService:
     async def _configure(self, session_id, tab_id, options):
         self._session(session_id)
         self._check_control(session_id)
+        if options.get("navigation_timeout_ms") is not None:
+            self._navigation_timeout(requested=options["navigation_timeout_ms"])
         result = await self._rpc("configure", session_id=session_id, tab_id=tab_id, options=options)
         self.configurations.setdefault(session_id, {}).setdefault(tab_id, {}).update(options)
         return result
@@ -641,7 +1007,7 @@ class BrowserService:
         completion_timeout_ms=5000,
         follow_up=False,
     ):
-        self._session(session_id)
+        session = self._session(session_id)
         self._check_control(session_id)
         self._check_uncertain(session_id)
         engine_action = action
@@ -670,7 +1036,9 @@ class BrowserService:
             json.dumps([session_id, tab_id, expected_revision, action], sort_keys=True).encode()
         ).hexdigest()
         approval_binding = hashlib.sha256(
-            json.dumps([session_id, tab_id, action], sort_keys=True).encode()
+            json.dumps(
+                [session_id, tab_id, session.get("approval_epoch", 0), action], sort_keys=True
+            ).encode()
         ).hexdigest()
         if self.store.get("execution", binding):
             raise BrowserError(
@@ -783,6 +1151,8 @@ class BrowserService:
                     "binding": approval_binding,
                     "target_binding": prepared.get("target_binding"),
                     "state": "pending",
+                    "session_id": session_id,
+                    "approval_epoch": session.get("approval_epoch", 0),
                 },
                 self.cfg.approval_ttl,
             )
@@ -836,11 +1206,30 @@ class BrowserService:
             try:
                 waited = await self._wait(session_id, tab_id, completion, completion_timeout_ms)
                 result["completion"] = waited.get("wait")
+                if not result["completion"].get("matched"):
+                    uncertain = bool(result["completion"].get("partial"))
+                    result["status"] = "error"
+                    result["error"] = {
+                        "code": "RESULT_UNCERTAIN" if uncertain else "ACTION_GOAL_NOT_MET",
+                        "message": "Action was dispatched but its requested completion condition was not met; observe before any new action",
+                        "retryable": False,
+                        "suggested_tool": "browser_handoff" if uncertain else "browser_observe",
+                    }
+                    if uncertain:
+                        self.sessions[session_id]["uncertain"] = True
             except BrowserError as exc:
                 result["completion"] = {
                     "matched": False,
                     "error": {"code": exc.code, "message": exc.message},
                 }
+                result["status"] = "error"
+                result["error"] = {
+                    "code": "RESULT_UNCERTAIN",
+                    "message": "Action was dispatched but completion could not be observed; do not repeat it",
+                    "retryable": False,
+                    "suggested_tool": "browser_handoff",
+                }
+                self.sessions[session_id]["uncertain"] = True
         if follow_up and not result.get("dialog"):
             try:
                 observed = await self._observe(
@@ -981,13 +1370,30 @@ class BrowserService:
             record = self.store.get("approval", token)
             if not record or record["state"] != "pending":
                 raise BrowserError("CONFIRMATION_STALE", "Approval is no longer pending")
+            session = self._session(item["session_id"])
+            if record.get("session_id") != item["session_id"] or record.get(
+                "approval_epoch"
+            ) != session.get("approval_epoch", 0):
+                raise BrowserError("CONFIRMATION_STALE", "Manual control invalidated this approval")
             record["state"] = "approved" if approved else "denied"
             self.store.put("approval", token, record, max(1, item["expires"] - time.time()))
             # Keep the bounded record until expiry so browser_status reports denials.
 
+    def _invalidate_approvals(self, session_id):
+        """A private-control transition revokes only this work's outstanding approvals."""
+        session = self._session(session_id)
+        session["approval_epoch"] = session.get("approval_epoch", 0) + 1
+        for review_id, item in list(self.pending.items()):
+            if item["session_id"] == session_id:
+                self.store.delete("approval", item["token"])
+                self.pending.pop(review_id)
+        # The generation also rejects persisted tokens no longer in pending. Never
+        # clear execution records: private control does not make a dispatch retry-safe.
+
     async def _start_handoff(self, session_id, tab_id, kind, reason, site_origin=None):
         self._session(session_id)
         self._check_control(session_id)
+        await self._cancel_navigation(session_id)
         if not self.cfg.manual_control_enabled:
             raise BrowserError(
                 "HANDOFF_UNAVAILABLE", "Operator has not enabled the private remote-control console"
@@ -1012,6 +1418,9 @@ class BrowserService:
                 "Operator configuration identifies only passkey/security-key authentication; forwarding is unsupported",
                 "user_action_required",
             )
+        # Revoke before focus may pause/start private control. Startup failure must
+        # not restore consent granted for the previous automation state.
+        self._invalidate_approvals(session_id)
         self.clipboards.clear()
         lease = {
             "handoff_id": "handoff_" + secrets.token_urlsafe(18),
@@ -1086,6 +1495,7 @@ class BrowserService:
             # An idle work TTL must not trap the user inside protected login forever.
             self._touch(lease["session_id"])
             self._session(lease["session_id"])
+            self._invalidate_approvals(lease["session_id"])
             # Gate new desktop connections before disconnecting existing ones. Do not
             # restore automation until both disconnection and fresh observation succeed.
             lease["state"] = "returning"
@@ -1197,6 +1607,26 @@ class BrowserService:
             return {"state": "cancelled", "session_id": sid, "session_closed": True}
 
     def _capabilities(self):
+        if self.cfg.engine == "wpe":
+            return {
+                "engine": "wpe-single-tab-preview",
+                "approval_policy": "strict-per-click",
+                "tabs_per_work": 1,
+                "max_works": 1,
+                "navigation": "explicit-goto-only",
+                "observation": "bounded-main-document-semantic-text",
+                "page_actions": "observed-node-click-only",
+                "image_content": "static-unfilled-main-document-only",
+                "manual_control": self.cfg.manual_control_enabled,
+                "authentication_verification": bool(self.cfg.auth_rules),
+                "webmcp": False,
+                "page_tools": "disabled",
+                "webmcp_runtime_check": "unavailable",
+                "extended_input": [],
+                "clipboard": "disabled",
+                "artifacts": "disabled",
+                "installation": "loopback-development",
+            }
         return {
             "protocol_contract": "0.4-draft",
             "work_leases": "isolated-principal-bound",
@@ -1213,6 +1643,10 @@ class BrowserService:
             "scroll_containers": True,
             "history_policy": "observed-get-only",
             "navigation_details": "document-identity-and-same-document-events-v1",
+            "navigation_default_timeout_ms": int(self.cfg.navigation_timeout * 1000),
+            "navigation_max_timeout_ms": int(self.cfg.navigation_max_timeout * 1000),
+            "navigation_progress": "server-operation-id-browser-status",
+            "navigation_poll_max_hz": 2,
             "duplicate_action_policy": "exact-session-tab-revision-action",
             "pagination": "revision-bound-complete-nodes",
             "approval_policy": "strict-per-action"
@@ -1233,6 +1667,16 @@ class BrowserService:
             "authentication_verification": bool(self.cfg.auth_rules),
             "authentication_verification_scope": "operator_rules",
             "scoped_observation": True,
+            "observation_privacy": "protected-fields-and-owning-forms",
+            "optional_capture_admission": "worker-actual-geometry",
+            "node_registry": "session-bounded-backend-metadata",
+            "node_registry_bytes": self.cfg.node_registry_bytes,
+            "target_state_verification": ["fill", "select", "select_multiple", "check"],
+            "typing_events": "ascii-key-events-unicode-text-insertion",
+            "ime_composition": False,
+            "selection_events": "synthetic-input-change",
+            "shadow_dom": "open-composed-tree",
+            "closed_shadow_dom": False,
             "extended_input": [
                 "type",
                 "modifiers",
@@ -1289,6 +1733,18 @@ class BrowserService:
             "capabilities": self._capabilities(),
             "scheduler": self._scheduler(),
         }
+        result["navigations"] = [
+            {
+                "session_id": sid,
+                "tab_id": nav["tab_id"],
+                "operation_id": nav["operation_id"],
+                **nav["result"].get("navigation", {}),
+                "elapsed_ms": max(0, int((time.monotonic() - nav["started"]) * 1000)),
+                "timeout_ms": nav["timeout_ms"],
+            }
+            for sid, nav in self.navigations.items()
+            if not session_id or sid == session_id
+        ]
         ids = [session_id] if session_id else list(self.sessions)
         for sid in ids:
             # Cached status remains available for expired work, especially while
@@ -1327,6 +1783,7 @@ class BrowserService:
         if session_id not in self.sessions:
             self._session(session_id)
         self._check_control(session_id)
+        await self._cancel_navigation(session_id, None if scope == "session" else tab_id)
         result = await self._rpc("close", session_id=session_id, scope=scope, tab_id=tab_id)
         if scope == "session" or result.get("session_closed"):
             self._forget(session_id, "closed", result.get("termination_reason", "explicit_close"))
@@ -1337,6 +1794,7 @@ class BrowserService:
         async with self._command_lock():
             if session_id not in self.sessions:
                 raise BrowserError("SESSION_NOT_FOUND", "No active session to reclaim")
+            await self._cancel_navigation(session_id)
             lease = self.leases.get(session_id)
             if lease:
                 lease["state"] = "returning"
@@ -1361,6 +1819,9 @@ class BrowserService:
             return {"session_closed": True, "termination_reason": "administrator_reclaimed"}
 
     async def shutdown(self):
+        async with self._command_lock():
+            for sid in list(self.navigations):
+                await self._cancel_navigation(sid)
         if self.sweeper:
             self.sweeper.cancel()
             await asyncio.gather(self.sweeper, return_exceptions=True)

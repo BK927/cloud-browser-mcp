@@ -33,14 +33,18 @@ guaranteed to fit a 1GiB browser budget.
 `CB_MEMORY_FLOOR_MB=96`, after allowing for the requested operation's estimated
 cost. The host must still retain the normal reserve plus that cost. Starting
 a profile budgets 192MiB; a new tab 96MiB; navigation 64MiB. Capture estimates
-32MiB plus 16 bytes per pixel (full-page requests use the configured maximum
-pixel count). These are admission estimates, not per-operation hard caps or
+32MiB plus 16 bytes per pixel, checked in the worker immediately before capture
+using the actual viewport/full-page geometry. These are admission estimates, not per-operation hard caps or
 measured guarantees. `strict` retains the normal reserve for every admitted task.
 PSI's worst host/cgroup avg10 is reported; full stalls >=10% or some stalls >=50%
 deny new admitted work. PSI absence is reported as unknown, never zero.
 Small fresh text observations and explicit cleanup remain available under
-pressure. Auto observations fall back to bounded interactive text; a denied
+pressure. Auto observations retain bounded fresh main text plus controls; a denied
+optional capture is reported in `observation.screenshot_omitted`. An explicit
 visual request returns RESOURCE_PRESSURE rather than pretending to return an image.
+`observation_revision` identifies the text snapshot. If capture advances the
+page revision, a truncated continuation is invalidated (`pagination_stale=true`)
+and the client must observe again, rather than consume a stale cursor.
 
 Neither policy changes `memory.max`, swap limits, the network sandbox, approval
 rules or another work's tabs. There is no AI command that removes hard limits.
@@ -72,17 +76,22 @@ outer label and does not disguise failed calls as success to suppress it.
 `browser_observe.query` accepts `frame_id`, CSS `scope` and `selector`, `role`,
 `name`, `label`, and `limit` (1–100). Scope/selector only locate observed DOM
 objects; subsequent actions require the returned backend-bound node IDs.
-Name/label/role filters are case-insensitive substring filters on observed
-metadata. Only visible viewport nodes are actionable. Semantic CSS queries
-read the first matching rendered subtree. Query limits and partial frames are
+Name/label filters are normalized, case-insensitive substring filters; role
+requires an exact normalized match. Only visible viewport nodes are actionable.
+Semantic CSS queries read rendered matching subtrees within bounded text/scan
+budgets, not the first hidden duplicate. The query limit bounds issued nodes,
+not the entire semantic text.
+`query_match_count` and `query_empty_reason` explain missing, hidden, protected,
+empty and scan-budget-limited results. Query limits and partial frames are
 reported, not represented as a complete DOM dump. Omitting query on a new
 observation resets its scope; a cursor retains its original snapshot.
 
 `browser_wait` accepts a condition with type `url` (exact `value`), `element`
 (`query`, state present/absent/visible/hidden/enabled), `dialog`, or `download`
 (completed). Waits are bounded to 10 seconds; timeout is `no_change` with
-`wait.timed_out=true`. A hidden/absent element condition means absent from the
-visible, bounded query result, not proof that no matching DOM node exists.
+`wait.timed_out=true`. Present/absent tests DOM existence, including hidden
+elements; visible/hidden tests rendering, including offscreen elements.
+Incomplete queries do not establish absence or hidden state.
 Use narrow selectors; a partial observation is not a global absence proof.
 
 `browser_act.completion` uses the same condition and optional
@@ -90,6 +99,10 @@ Use narrow selectors; a partial observation is not a global absence proof.
 interactive observation. A failed completion wait does not erase the fact that
 the action was dispatched. Never repeat a submitted action because its wait
 timed out. Poll `browser_status(operation_id=...)` after a lost HTTP response.
+Known completion/target-state mismatch is `ACTION_GOAL_NOT_MET`, not `ok`.
+An incomplete or unavailable post-action observation is `RESULT_UNCERTAIN`.
+`fill`, `select`, `select_multiple`, and `check` report `target_state_verified`;
+`performed` separately records whether the action was delivered.
 
 ## Keyboard and mouse
 
@@ -98,6 +111,10 @@ Added action types: `type` (append sequential Unicode text), `right_click`,
 `select_multiple` (`values`). Typing's total artificial delay is at most 8 s;
 drag uses 2–30 bounded pointer steps. Native pointer drags are supported;
 browser-specific HTML5 drag-data behavior is not universally guaranteed.
+`type` sends native key-down/character/key-up events for printable ASCII. Other
+Unicode uses text insertion; this is not a real IME/composition guarantee.
+`fill` retains fast text replacement. Selection sends synthetic `input` and
+`change` events and verifies the final value; it does not claim trusted native selection.
 
 Click/key/drag actions accept modifier names ALT/CONTROL/META/SHIFT. Ordinary
 editing and Ctrl+A/Z/Y are automatic in balanced-v3. Modified activation and
@@ -160,6 +177,10 @@ are automatically selected. Auth/manual control disables picker interception.
 an in-memory text buffer per work lease, never the user's PC or server clipboard.
 Paste follows the same input policy as fill. Authentication, handoff and session
 termination clear the buffer.
+Entering and completing private control invalidates that work's outstanding
+approvals, issued nodes, screenshots and cursors, even if the target looks unchanged.
+Transition failure does not restore earlier consent. Execution deduplication
+records remain intact; manual control does not authorize a dispatch retry.
 
 ## Operator-pinned WebMCP reads and URLs
 
@@ -170,6 +191,9 @@ review. The digest uses sorted-key, ASCII-escaped compact JSON. Origin, tool nam
 and schema must all match; a page's own `readOnly` hint is not authority. Changed
 registration/schema requires re-observation or confirmation. The operator must
 independently determine that the tool is appropriate for preauthorization.
+Page-provided functions are unavailable when protected regions or uninspectable
+frames are present: unlike filtered DOM observation, arbitrary page callbacks
+can collect hidden private values. Use the filtered observation interface instead.
 
 URL output now preserves common public search/navigation parameters and document
 anchors. Unknown query parameters, credentials, authentication fragments and

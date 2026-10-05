@@ -179,6 +179,7 @@ class WaitCondition(StrictModel):
 
 
 class Configuration(StrictModel):
+    navigation_timeout_ms: int | None = Field(None, ge=1000, le=300000)
     viewport_width: int | None = Field(None, ge=320, le=1920)
     viewport_height: int | None = Field(None, ge=240, le=1440)
     screenshot_quality: int | None = Field(None, ge=25, le=95)

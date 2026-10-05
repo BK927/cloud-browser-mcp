@@ -45,7 +45,9 @@ class Settings(BaseSettings):
     memory_per_session_mb: int = Field(192, ge=64)
     max_sessions: int = Field(2, ge=1, le=8)
     max_capture_pixels: int = Field(8_000_000, ge=786432)
-    navigation_timeout: float = Field(20, ge=1, le=30)
+    node_registry_bytes: int = Field(2 * 1024 * 1024, ge=64 * 1024, le=16 * 1024 * 1024)
+    navigation_timeout: float = Field(60, ge=1, le=300)
+    navigation_max_timeout: float = Field(300, ge=1, le=300)
     auth_rules: dict[str, AuthRule] = Field(default_factory=dict)
     webmcp_enabled: bool = True
     webmcp_testing: bool = False
@@ -67,6 +69,10 @@ class Settings(BaseSettings):
     max_staged_uploads: int = Field(8, ge=1, le=32)
     upload_ttl: int = Field(600, ge=60, le=3600)
     chromium_path: str = "/usr/bin/chromium"
+    engine: Literal["chromium", "wpe"] = "chromium"
+    wpe_driver_path: str = "/usr/bin/WPEWebDriver"
+    wpe_cog_path: str = "/usr/bin/cog"
+    wpe_weston_path: str = "/usr/bin/weston"
     browser_proxy: str = "http://egress:3128"
     headless: bool = False
     # Inspect ordinary frames; mask sensitive/uninspectable regions. The legacy
@@ -79,6 +85,39 @@ class Settings(BaseSettings):
 
     @model_validator(mode="after")
     def safe_deployment(self):
+        if self.navigation_timeout > self.navigation_max_timeout:
+            raise ValueError("Default navigation timeout exceeds the operator ceiling")
+        if self.engine == "wpe":
+            # WPE is an opt-in single-page preview until the full production
+            # network, visual privacy and human-control paths are verified.
+            if not self.development:
+                raise ValueError("WPE preview is not enabled for production deployments")
+            if self.max_sessions != 1:
+                raise ValueError("WPE preview requires one session")
+            if self.manual_control_enabled and (not self.managed_display or self.headless):
+                raise ValueError("WPE private control requires a headed managed display")
+            if self.manual_control_enabled and not self.admin_password_hash.startswith(
+                "$argon2id$"
+            ):
+                raise ValueError("WPE private control requires an Argon2id administrator password")
+            if self.manual_control_enabled and urlsplit(self.vnc_websocket).hostname not in (
+                "127.0.0.1",
+                "localhost",
+                "::1",
+            ):
+                raise ValueError("WPE private desktop bridge must remain on loopback")
+            if self.webmcp_enabled:
+                raise ValueError("WPE preview does not support page-provided tools")
+            if self.network_isolated or self.bind_host not in ("127.0.0.1", "::1", "localhost"):
+                raise ValueError("WPE preview must be a loopback-only development service")
+            if urlsplit(self.public_origin).hostname not in (
+                "127.0.0.1",
+                "localhost",
+                "::1",
+            ):
+                raise ValueError("WPE preview must have a loopback public origin")
+            if urlsplit(self.control_origin).hostname not in ("127.0.0.1", "localhost", "::1"):
+                raise ValueError("WPE preview must have a loopback control origin")
         if self.grant_max_ttl < self.refresh_ttl:
             raise ValueError("OAuth grant lifetime must cover the refresh token lifetime")
         if self.display_number + self.max_sessions > 1000:

@@ -222,21 +222,31 @@ async def test_service_open_checks_egress_before_allocating_session(service, pro
 @pytest.mark.parametrize("operation", ["open", "goto", "back", "forward"])
 def test_adapter_checks_proxy_before_navigation_or_browser_start(operation, monkeypatch):
     adapter = object.__new__(DrissionAdapter)
-    adapter.cfg = SimpleNamespace(network_isolated=True, browser_proxy="http://egress:3128")
+    adapter.cfg = SimpleNamespace(
+        network_isolated=True,
+        browser_proxy="http://egress:3128",
+        navigation_timeout=60,
+        navigation_max_timeout=300,
+    )
     checks = []
 
     def denied(url, *, dns_proxy=None):
         checks.append((url, dns_proxy))
         raise BrowserError("EGRESS_UNAVAILABLE", "Simulated unavailable proxy")
 
-    def cdp(command):
+    def cdp(command, **kwargs):
         assert command == "Page.getNavigationHistory"
         return {
             "currentIndex": 1,
             "entries": [{"id": i, "url": "https://example.com/"} for i in range(3)],
         }
 
-    state = SimpleNamespace(tab=SimpleNamespace(url="https://example.com/", run_cdp=cdp))
+    state = SimpleNamespace(
+        tab=SimpleNamespace(url="https://example.com/", run_cdp=cdp),
+        navigation_job=None,
+        options={},
+        history_methods={},
+    )
     adapter._tab = lambda *args: state
     monkeypatch.setattr("cloud_browser.drission.validate_url", denied)
     with pytest.raises(BrowserError) as exc:

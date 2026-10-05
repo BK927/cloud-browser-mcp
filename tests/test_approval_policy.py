@@ -1,5 +1,5 @@
 import pytest
-from conftest import FakeWorker
+from conftest import FakeWorker, fake_worker_resources
 from pydantic import ValidationError
 
 from cloud_browser.approval import decide
@@ -197,6 +197,7 @@ async def test_automatic_dispatch_is_not_retried_without_visible_change(cfg, unc
     worker = AutomaticWorker()
     store = Store(cfg.data_dir / "balanced-test.sqlite3")
     service = BrowserService(cfg, store, worker=worker)
+    service.resources = fake_worker_resources
     try:
         opened = await service.call("open")
         args = {k: opened[k] for k in ("session_id", "tab_id")}

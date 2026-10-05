@@ -51,6 +51,15 @@ OBSERVATION = {
     "interactive_snapshot": '{"node_id":"node_1"}',
     "truncated": True,
     "next_cursor": "cursor_test",
+    "query_match_count": 2,
+    "query_empty_reason": None,
+    "protected_regions_omitted": True,
+    "observation_revision": 3,
+    "screenshot_omitted": {
+        "code": "RESOURCE_PRESSURE",
+        "message": "Use text",
+        "resources": {"available_mb": 100},
+    },
     "viewport": {"width": 1024, "height": 768},
     "frames": [
         {
@@ -104,7 +113,12 @@ CASES = [
         "act",
         IDS | {"expected_revision": 1, "action": {"type": "scroll"}},
         {
-            "action_result": {"performed": True, "page_changed": True, "new_tab_ids": ["tab_new"]},
+            "action_result": {
+                "performed": True,
+                "page_changed": True,
+                "target_state_verified": False,
+                "new_tab_ids": ["tab_new"],
+            },
             "completion": {
                 "matched": False,
                 "error": {"code": "TIMEOUT", "message": "Wait failed"},
@@ -266,7 +280,7 @@ async def test_every_registered_tool_has_meaningful_output_schema(registered):
             schema["required"]
         )
         assert len(schema["properties"]) > 11  # Includes method-specific result fields.
-        assert schema["properties"]["revision"]["anyOf"] == [{"type": "integer"}, {"type": "null"}]
+        assert schema["properties"]["revision"]["type"] == ["integer", "null"]
     size = len(
         json.dumps(
             [t.model_dump(by_alias=True, exclude_none=True) for t in tools],
