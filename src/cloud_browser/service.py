@@ -62,6 +62,7 @@ class BrowserService:
         self.handoff_registered = False
         self.recent_errors = OrderedDict()
         self.diagnosed_errors = OrderedDict()
+        self.worker_idle_since = None
 
     def start(self):
         if self.sweeper is None:
@@ -75,6 +76,7 @@ class BrowserService:
             async with self.lock:
                 try:
                     await self._reap_expired()
+                    await self._reap_idle_worker()
                 except BrowserError:
                     self.cleanup_required = True
 
@@ -113,6 +115,48 @@ class BrowserService:
             if owner == sid:
                 self.uploads.discard(upload)
                 self.upload_owners.pop(upload, None)
+        if not self.sessions:
+            self.worker_idle_since = time.monotonic()
+
+    async def _reap_idle_worker(self):
+        """Called under the command lock; never reclaim a live or uncertain work.
+
+        Only successful session cleanup arms this timer. HTTP cancellation,
+        memory pressure and another work's inactivity are not authority to stop
+        the shared worker. Completed operation records remain in this process.
+        """
+        if (
+            not self.cfg.worker_idle_timeout
+            or self.worker_idle_since is None
+            or self.sessions
+            or self.reader_lock.locked()
+            or self.navigations
+            or self.queued
+            or self.running
+            or self._active_control()
+            or self.cleanup_required
+            or getattr(self.worker, "cleanup_failed", False)
+            or time.monotonic() - self.worker_idle_since < self.cfg.worker_idle_timeout
+        ):
+            return
+        # Do not repeatedly signal/clean a failed worker from the idle sweeper.
+        self.worker_idle_since = None
+        cleanup = asyncio.create_task(self.worker.shutdown())
+        try:
+            await asyncio.shield(cleanup)
+        except BrowserError:
+            self.cleanup_required = True
+            raise
+        except asyncio.CancelledError:
+            # Keep the command lock until the dedicated-UID cleanup settles.
+            # Cancelling its waiter cannot stop an already-running helper thread.
+            try:
+                await cleanup
+            except BrowserError:
+                self.cleanup_required = True
+            # Preserve cancellation even if cleanup failed: the sweep must stop,
+            # not catch that BrowserError and begin another iteration at shutdown.
+            raise
 
     async def _reap_expired(self):
         self._expire_reads()
@@ -140,7 +184,7 @@ class BrowserService:
                     "blocked",
                 ) from exc
             self._forget(sid, "expired", "idle_lease_expired")
-        self.cleanup_required = False
+        self.cleanup_required = bool(getattr(self.worker, "cleanup_failed", False))
 
     def _scheduler(self):
         control = self._active_control()
@@ -655,6 +699,7 @@ class BrowserService:
                             "uncertain": False,
                             "approval_epoch": 0,
                         }
+                        self.worker_idle_since = None
                     sid = self.reader_sid
                     if self.reader_tid is None:
                         opened = await self._rpc(
@@ -1233,6 +1278,7 @@ class BrowserService:
                 "last_activity": time.time(),
                 "approval_epoch": 0,
             }
+            self.worker_idle_since = None
             if _principal is not None:
                 self.owners[session_id] = new_ownership(_principal)
                 self._remember_session(session_id, "active", "opening")

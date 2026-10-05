@@ -50,6 +50,14 @@ from .security import (
 from .uploads import verify_file
 
 SNAPSHOT = Path(__file__).with_name("snapshot.js").read_text(encoding="utf-8")
+# Python's Unicode whitespace differs from JavaScript's \s (notably U+0085,
+# U+001C..U+001F and U+FEFF). Preserve TOKEN's exact matching semantics in CDP.
+_TOKEN_WHITESPACE = (
+    r"\u0009-\u000d\u001c-\u0020\u0085\u00a0\u1680\u2000-\u200a\u2028\u2029\u202f\u205f\u3000"
+)
+TOKEN_JS_PATTERN = TOKEN.pattern.replace(r"\s", f"[{_TOKEN_WHITESPACE}]").replace(
+    r"\S", f"[^{_TOKEN_WHITESPACE}]"
+)
 
 
 @dataclass
@@ -347,6 +355,8 @@ class DrissionAdapter:
                     "lightweight": lightweight,
                     "query": state.query,
                     **(reader_options or {}),
+                    "reader": bool(reader_options),
+                    "token_pattern": TOKEN_JS_PATTERN,
                 }
             )
             + ";"
@@ -691,6 +701,7 @@ class DrissionAdapter:
                     sensitive = (
                         child.data["protected"]
                         or child.data.get("has_sensitive_regions")
+                        or child.data.get("sensitive_text")
                         or bool(TOKEN.search(child.data["text"]))
                         or bool(child.data.get("challenge"))
                     )
@@ -792,6 +803,7 @@ class DrissionAdapter:
                 and not child.data.get("privacy_incomplete")
                 and not child.data.get("has_sensitive_regions")
                 and not child.data.get("protected")
+                and not child.data.get("sensitive_text")
                 and not TOKEN.search(child.data.get("text", ""))
             ):
                 try:
@@ -1926,7 +1938,8 @@ class DrissionAdapter:
                 "CAPTURE_TIMEOUT", "Capture exceeded its 15-second processing budget"
             )
         if (
-            TOKEN.search(data["text"])
+            data.get("sensitive_text")
+            or TOKEN.search(data["text"])
             or (data["has_iframe"] and self.cfg.iframe_screenshot_policy == "block")
             or data.get("privacy_incomplete")
             or data.get("privacy_mask_unsafe")
@@ -1937,7 +1950,7 @@ class DrissionAdapter:
                 "blocked",
                 reason=(
                     "secret_text"
-                    if TOKEN.search(data["text"])
+                    if data.get("sensitive_text") or TOKEN.search(data["text"])
                     else "iframe_policy"
                     if data["has_iframe"] and self.cfg.iframe_screenshot_policy == "block"
                     else "privacy_incomplete"
@@ -2004,7 +2017,11 @@ class DrissionAdapter:
                 state, after, after_frames, after_protected, after_restricted
             ),
         )
-        if TOKEN.search(after["text"]) or after.get("privacy_mask_unsafe"):
+        if (
+            after.get("sensitive_text")
+            or TOKEN.search(after["text"])
+            or after.get("privacy_mask_unsafe")
+        ):
             reasons.append("privacy_unbounded")
         if reasons:
             failure = BrowserError(
@@ -2927,6 +2944,27 @@ class DrissionAdapter:
         )
         return {"text": redact(text)}
 
+    def _probe_url(self, state):
+        """Fresh top-level URL/privacy evidence, without changing node/revision state."""
+        if state.events.dialog:
+            raise BrowserError("DIALOG_OPEN", "A JavaScript dialog is open; inspect browser_dialog")
+        tab = state.tab
+        frame = tab.run_cdp("Page.getFrameTree")["frameTree"]["frame"]["id"]
+        world = tab.run_cdp(
+            "Page.createIsolatedWorld", frameId=frame, worldName="cloud-browser-observer"
+        )["executionContextId"]
+        result = tab.run_cdp(
+            "Runtime.evaluate",
+            expression="globalThis.__cbOptions={guard_only:true};" + SNAPSHOT,
+            contextId=world,
+            returnByValue=True,
+        )
+        if "exceptionDetails" in result or "value" not in result.get("result", {}):
+            raise BrowserError("OBSERVATION_FAILED", "Page cannot be observed yet")
+        data = result["result"]["value"]
+        self._guard_page(data)
+        return data["url"]
+
     def wait(self, session_id, tab_id, condition, timeout_ms=5000):
         state = self._tab(session_id, tab_id)
         deadline = time.monotonic() + timeout_ms / 1000
@@ -2938,6 +2976,16 @@ class DrissionAdapter:
             elif typ == "download":
                 items = self._session(session_id)["artifacts"].list()
                 matched = any(i["state"] == "completed" for i in items)
+            elif typ == "url":
+                try:
+                    matched = self._probe_url(state) == condition["value"]
+                except BrowserError:
+                    raise
+                except Exception:
+                    # Classify a tab/session closed between polls. A live tab
+                    # keeps the original CDP failure; never retry the probe.
+                    self._tab(session_id, tab_id)
+                    raise
             else:
                 seen = self.observe(
                     session_id,
@@ -2948,37 +2996,50 @@ class DrissionAdapter:
                     query=condition.get("query"),
                     _wait_state=condition.get("state", "present"),
                 )
-                if typ == "url":
-                    matched = state.tab.url == condition["value"]
-                else:
-                    observation = seen["observation"]
-                    frame_partial = observation.get("frame_reading_truncated", False)
-                    if condition.get("state") in ("absent", "hidden") and frame_partial:
-                        frames = observation.get("frames")
-                        if frames:
-                            # Zero-area/hidden frames are reported as FRAME_NOT_VISIBLE.
-                            # Missing inventory or any other unreadable reason stays unknown.
-                            frame_partial = any(
-                                not frame.get("readable")
-                                and frame.get("reason") != "FRAME_NOT_VISIBLE"
-                                for frame in frames
-                            )
-                    partial = (
-                        any(observation.get(key) for key in ("truncated", "interactive_truncated"))
-                        or frame_partial
-                    )
-                    nodes = [
-                        json.loads(line)
-                        for line in seen["observation"]["interactive_snapshot"].splitlines()
-                    ]
-                    matched = (
-                        any(not n.get("disabled") for n in nodes)
-                        if condition.get("state") == "enabled"
-                        else bool(nodes)
-                    )
+                observation = seen["observation"]
+                frame_partial = observation.get("frame_reading_truncated", False)
+                if condition.get("state") in ("absent", "hidden") and frame_partial:
+                    frames = observation.get("frames")
+                    if frames:
+                        # Zero-area/hidden frames are reported as FRAME_NOT_VISIBLE.
+                        # Missing inventory or any other unreadable reason stays unknown.
+                        frame_partial = any(
+                            not frame.get("readable") and frame.get("reason") != "FRAME_NOT_VISIBLE"
+                            for frame in frames
+                        )
+                partial = (
+                    any(observation.get(key) for key in ("truncated", "interactive_truncated"))
+                    or frame_partial
+                )
+                nodes = [
+                    json.loads(line)
+                    for line in seen["observation"]["interactive_snapshot"].splitlines()
+                ]
+                matched = (
+                    any(not n.get("disabled") for n in nodes)
+                    if condition.get("state") == "enabled"
+                    else bool(nodes)
+                )
             if condition.get("state") in ("absent", "hidden"):
                 matched = not matched and not partial
             if matched or time.monotonic() >= deadline:
+                if typ == "url":
+                    # Preserve the terminal wait's fresh page, revision, frame and
+                    # privacy evidence, including a navigation during the probe.
+                    self.observe(
+                        session_id,
+                        tab_id,
+                        mode="interactive",
+                        max_chars=8000,
+                        lightweight=True,
+                        query=condition.get("query"),
+                        _wait_state=condition.get("state", "present"),
+                    )
+                    matched = state.tab.url == condition["value"]
+                    if condition.get("state") in ("absent", "hidden"):
+                        matched = not matched
+                    if not matched and time.monotonic() < deadline:
+                        continue
                 return self._cached_result(
                     session_id,
                     tab_id,

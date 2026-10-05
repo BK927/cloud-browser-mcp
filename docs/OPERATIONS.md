@@ -64,6 +64,20 @@ until explicit completion/cancellation, including after idle expiry. Private fil
 staging must select the destination work when more than one exists. The console's
 reclaim action closes only the selected work.
 
+After every work, including the server-managed reader browser, has closed
+successfully, `CB_WORKER_IDLE_TIMEOUT=30` allows the
+shared Python browser worker to exit on the next idle sweep. This reclaims its
+imports and allocator state, not live browser tabs. A new work starts a fresh
+worker automatically; its first call pays the process/import startup cost.
+Set this operator option to `0` to retain the warm worker. The sweep never stops
+a worker with an open/uncertain work, queued/running command, active read, pending
+navigation, private human control, or unresolved cleanup failure. The reader
+browser first follows its own `CB_READER_IDLE_TTL`; cached read slices need no
+worker and remain available until their normal cache expiry. API-side operation
+results, credentials and saved profiles remain unchanged.
+See [the measured local comparison](OBSERVATION_PERFORMANCE_2026-09-16.md) for
+the observed memory recovery, next-open latency tradeoff and Pi validation limits.
+
 Capacity/control failures include a domain `error.code`, category and a safe
 reason where applicable. Up to 120 payload-free capacity log records per minute
 contain the exact MCP `request_id`; excess records are dropped. No URL, session,

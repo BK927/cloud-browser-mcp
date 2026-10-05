@@ -37,6 +37,7 @@ class Settings(BaseSettings):
     session_ttl: int = Field(3600, ge=60)
     control_session_ttl: int = Field(28800, ge=900, le=86400)
     session_sweep_interval: float = Field(15, ge=1, le=300)
+    worker_idle_timeout: float = Field(30, ge=0, le=3600)
     command_queue_timeout: float = Field(46, ge=1, le=60)
     max_queued_per_work: int = Field(4, ge=1, le=16)
     approval_ttl: int = Field(120, ge=15, le=600)

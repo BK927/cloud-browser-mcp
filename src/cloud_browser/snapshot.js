@@ -181,6 +181,90 @@
     }
     return false;
   };
+  const accessibleName = e => {
+    if (!e || protectedElement(e)) return '';
+    const safeText = root => {
+      if (!root || protectedElement(root)) return '';
+      const pending=[root], visited=new Set(), out=[];
+      let chars=0;
+      for (let n=0; pending.length && n<scanBudget && chars<2000; n++) {
+        const child=pending.pop();
+        if (!child || visited.has(child)) continue;
+        visited.add(child);
+        if (child.nodeType === Node.TEXT_NODE) { const text=child.substringData(0,2000-chars);out.push(text);chars+=text.length;continue; }
+        if (child.nodeType !== Node.ELEMENT_NODE || hidden(child) || protectedElement(child) ||
+            /^(SCRIPT|STYLE|TEMPLATE|NOSCRIPT|INPUT|TEXTAREA|SELECT|IFRAME|FRAME)$/.test(child.tagName)) continue;
+        const children=composedChildren(child);
+        for (let i=children.length-1;i>=0;i--) pending.push(children[i]);
+      }
+      return out.join(' ');
+    };
+    const label = [...(e.labels || [])].slice(0, 4).map(safeText).join(' ');
+    const labelledBy = (e.getAttribute('aria-labelledby') || '').split(/\s+/).slice(0, 16)
+      .map(id => safeText(e.getRootNode().getElementById?.(id) || document.getElementById(id))).join(' ');
+    const image = e.querySelector('img[alt]');
+    return normalize(normalize(labelledBy) || e.getAttribute('aria-label') || label || safeText(e) ||
+      (e.tagName === 'IMG' ? e.alt : '') || (image && !protectedElement(image) ? image.alt : '') ||
+      e.getAttribute('title') || e.placeholder || '').slice(0, 500);
+  };
+  const excluded = /^(SCRIPT|STYLE|TEMPLATE|NOSCRIPT|IFRAME|FRAME|OBJECT|EMBED|SVG|CANVAS|VIDEO|INPUT|TEXTAREA|SELECT)$/;
+  const block = /^(P|DIV|SECTION|ARTICLE|MAIN|HEADER|FOOTER|ASIDE|NAV|UL|OL|LI|TABLE|TR|BLOCKQUOTE|PRE|DL|DT|DD|FIGURE|FIGCAPTION|FORM)$/;
+  const collectText = (start, semantic, budget=textBudget, limit=scanBudget) => {
+    const rootSet = new Set(start);
+    let count=0, chars=0, truncated=false;
+    const pieces=[], pending=[], visited=new Set();
+    const add = text => {
+      const part=text.slice(0,Math.max(0,budget-chars));
+      if (part) {pieces.push(part);chars+=part.length;}
+      if (part.length < text.length) truncated=true;
+    };
+    for(let i=start.length-1;i>=0;i--) if(start[i]) pending.push([start[i],false]);
+    while(pending.length && !truncated) {
+      const [e,closing]=pending.pop();
+      if (closing) {if(/^(TD|TH)$/.test(e.tagName)) add(' | ');if(/^H[1-6]$/.test(e.tagName)||block.test(e.tagName)) add('\n');continue;}
+      if(visited.has(e))continue;
+      visited.add(e);
+      if(++count>limit){truncated=true;break;}
+      if(e.nodeType===Node.TEXT_NODE){
+        const remaining=Math.max(0,budget-chars), part=e.substringData(0,Math.min(e.length,remaining));
+        const text=normalize(part);if(text)add(text+' ');
+        if(part.length<e.length)truncated=true;
+        continue;
+      }
+      if(e.nodeType!==Node.ELEMENT_NODE || excluded.test(e.tagName) || protectedElement(e) || hidden(e))continue;
+      if(getComputedStyle(e).display!=='contents' && !e.getClientRects().length)continue;
+      if(semantic && !rootSet.has(e) && e.matches('nav,header,footer,aside,[role=navigation],[role=contentinfo],[role=banner]'))continue;
+      const heading=/^H[1-6]$/.test(e.tagName);
+      if(heading)add('\n'+'#'.repeat(Number(e.tagName[1]))+' ');else if(block.test(e.tagName))add('\n');
+      if(e.tagName==='BR')add('\n');if(e.tagName==='LI')add('- ');
+      if(e.tagName==='IMG' && e.alt)add('[image: '+normalize(e.alt)+'] ');
+      pending.push([e,true]);
+      const children=composedChildren(e);
+      for(let i=children.length-1;i>=0;i--)pending.push([children[i],false]);
+    }
+    return {text:pieces.join('').replace(/[ \t]+\n/g,'\n').replace(/\n{3,}/g,'\n\n').trim(),truncated};
+  };
+  const protectedPage = privacyIncomplete;
+  const publicText = !protectedPage && !exactTarget ? collectText([document.body],false) : {text:'',truncated:false};
+  // Keep complete public-body guard evidence in the page, even when output
+  // text is capped or omitted. The same walker prunes protected regions,
+  // controls and child documents; its fixed privacy budget fails closed.
+  const guardText = publicText.truncated ? collectText([document.body],false,Infinity,privacyBudget) : publicText;
+  const sensitiveText = !protectedPage && !exactTarget && (guardText.truncated ||
+    !options.token_pattern || new RegExp(options.token_pattern,'u').test(guardText.text));
+  // Text alone is never a challenge signal: ordinary articles quote these phrases.
+  const challengeFrame = inspected.some(e => e.matches('iframe') && visible(e) && inViewport(e) &&
+    /https:\/\/(?:[^/]*\.)?(?:google\.com|recaptcha\.net)\/(?:recaptcha\/)(?:api2|enterprise)\/(?:anchor|bframe)|https:\/\/[^/]*hcaptcha\.com\/.*captcha|https:\/\/challenges\.cloudflare\.com\/.*turnstile/i.test(e.getAttribute('src') || ''));
+  const challengeControl = inspected.some(e => !protectedElement(e) && visible(e) && inViewport(e) &&
+    e.matches('input,button,[role=checkbox]') && /captcha|cf-chl|challenge-response/i.test([e.name,e.id].join(' ')));
+  const blockPanel = inspected.some(e => !protectedElement(e) && visible(e) && inViewport(e) &&
+    e.matches('form,[role=alert],[role=dialog],#challenge-form,#cf-error-details') &&
+    /automated queries|automated traffic|automation access.*blocked/i.test(accessibleName(e)));
+  const challenge = challengeFrame || (challengeControl && /verify (that )?you are human|complete the captcha|prove you.re not a robot/i.test(guardText.text)) ? 'captcha' : blockPanel ? 'bot' : null;
+  // URL polling retains top-level privacy/auth/block checks and skips form,
+  // element, frame, accessibility and capture inventories until completion.
+  if (options.guard_only) return {url:location.href, protected:protectedPage,
+    privacy_incomplete:privacyIncomplete, challenge};
   const protectedRegions = [];
   let maskInspectionIncomplete=false, geometryCount=0;
   const regionBounds = new Map(), geometrySafety = new WeakMap();
@@ -237,7 +321,6 @@
     protectedRegions.push({x:bound.left-2,y:bound.top-2,width:bound.right-bound.left+4,
       height:bound.bottom-bound.top+4,mask_safe:bound.safe,tag:owner.tagName.toLowerCase()});
   }
-  const protectedPage = privacyIncomplete;
   let scope = document, scopeMatches = null, selected = null;
   try {
     if (query.scope) {
@@ -270,32 +353,6 @@
     const s = getComputedStyle(e);
     return (/auto|scroll/.test(s.overflowY) && e.scrollHeight > e.clientHeight) ||
       (/auto|scroll/.test(s.overflowX) && e.scrollWidth > e.clientWidth);
-  };
-  const accessibleName = e => {
-    if (!e || protectedElement(e)) return '';
-    const safeText = root => {
-      if (!root || protectedElement(root)) return '';
-      const pending=[root], visited=new Set(), out=[];
-      let chars=0;
-      for (let n=0; pending.length && n<scanBudget && chars<2000; n++) {
-        const child=pending.pop();
-        if (!child || visited.has(child)) continue;
-        visited.add(child);
-        if (child.nodeType === Node.TEXT_NODE) { const text=child.substringData(0,2000-chars);out.push(text);chars+=text.length;continue; }
-        if (child.nodeType !== Node.ELEMENT_NODE || hidden(child) || protectedElement(child) ||
-            /^(SCRIPT|STYLE|TEMPLATE|NOSCRIPT|INPUT|TEXTAREA|SELECT|IFRAME|FRAME)$/.test(child.tagName)) continue;
-        const children=composedChildren(child);
-        for (let i=children.length-1;i>=0;i--) pending.push(children[i]);
-      }
-      return out.join(' ');
-    };
-    const label = [...(e.labels || [])].slice(0, 4).map(safeText).join(' ');
-    const labelledBy = (e.getAttribute('aria-labelledby') || '').split(/\s+/).slice(0, 16)
-      .map(id => safeText(e.getRootNode().getElementById?.(id) || document.getElementById(id))).join(' ');
-    const image = e.querySelector('img[alt]');
-    return normalize(normalize(labelledBy) || e.getAttribute('aria-label') || label || safeText(e) ||
-      (e.tagName === 'IMG' ? e.alt : '') || (image && !protectedElement(image) ? image.alt : '') ||
-      e.getAttribute('title') || e.placeholder || '').slice(0, 500);
   };
   // Bounded native-role fallback also works before the first AX-enriched observation.
   const roleOf = e => {
@@ -475,46 +532,8 @@
   const matchedRoots = selected ? selected.filter(e => !protectedElement(e) && rendered(e)) : null;
   const roots = matchedRoots || (query.scope ? (scope && !protectedElement(scope) && rendered(scope) ? [scope] : []) : [main || document.body]);
   const root = roots[0] || null;
-  const excluded = /^(SCRIPT|STYLE|TEMPLATE|NOSCRIPT|IFRAME|FRAME|OBJECT|EMBED|SVG|CANVAS|VIDEO|INPUT|TEXTAREA|SELECT)$/;
-  const block = /^(P|DIV|SECTION|ARTICLE|MAIN|HEADER|FOOTER|ASIDE|NAV|UL|OL|LI|TABLE|TR|BLOCKQUOTE|PRE|DL|DT|DD|FIGURE|FIGCAPTION|FORM)$/;
-  const collectText = (start, semantic, budget=textBudget) => {
-    const rootSet = new Set(start);
-    let count=0, chars=0, truncated=false;
-    const pieces=[], pending=[], visited=new Set();
-    const add = text => {
-      const part=text.slice(0,Math.max(0,budget-chars));
-      if (part) {pieces.push(part);chars+=part.length;}
-      if (part.length < text.length) truncated=true;
-    };
-    for(let i=start.length-1;i>=0;i--) if(start[i]) pending.push([start[i],false]);
-    while(pending.length && !truncated) {
-      const [e,closing]=pending.pop();
-      if (closing) {if(/^(TD|TH)$/.test(e.tagName)) add(' | ');if(/^H[1-6]$/.test(e.tagName)||block.test(e.tagName)) add('\n');continue;}
-      if(visited.has(e))continue;
-      visited.add(e);
-      if(++count>scanBudget){truncated=true;break;}
-      if(e.nodeType===Node.TEXT_NODE){
-        const remaining=Math.max(0,budget-chars), part=e.substringData(0,remaining);
-        const text=normalize(part);if(text)add(text+' ');
-        if(part.length<e.length)truncated=true;
-        continue;
-      }
-      if(e.nodeType!==Node.ELEMENT_NODE || excluded.test(e.tagName) || protectedElement(e) || hidden(e))continue;
-      if(getComputedStyle(e).display!=='contents' && !e.getClientRects().length)continue;
-      if(semantic && !rootSet.has(e) && e.matches('nav,header,footer,aside,[role=navigation],[role=contentinfo],[role=banner]'))continue;
-      const heading=/^H[1-6]$/.test(e.tagName);
-      if(heading)add('\n'+'#'.repeat(Number(e.tagName[1]))+' ');else if(block.test(e.tagName))add('\n');
-      if(e.tagName==='BR')add('\n');if(e.tagName==='LI')add('- ');
-      if(e.tagName==='IMG' && e.alt)add('[image: '+normalize(e.alt)+'] ');
-      pending.push([e,true]);
-      const children=composedChildren(e);
-      for(let i=children.length-1;i>=0;i--)pending.push([children[i],false]);
-    }
-    return {text:pieces.join('').replace(/[ \t]+\n/g,'\n').replace(/\n{3,}/g,'\n\n').trim(),truncated};
-  };
-  const semantic = !protectedPage && !exactTarget && !['interactive','visual'].includes(options.mode) ?
+  const semantic = !protectedPage && !exactTarget && (options.reader || !['interactive','visual'].includes(options.mode)) ?
     collectText(roots,true,Math.min(textBudget,options.max_text_chars || textBudget)) : {text:'',truncated:false};
-  const publicText = !protectedPage && !exactTarget ? collectText([document.body],false) : {text:'',truncated:false};
   const readerLinks=[], linkUrls=new Set();
   let readerLinksTruncated=false;
   if(options.collect_links && !protectedPage && !exactTarget) {
@@ -554,22 +573,14 @@
     }
     return {x:r.x,y:r.y,width:r.width,height:r.height,mask_safe:safe,tag:e.tagName.toLowerCase()};
   });
-  const bodyText = publicText.text;
   const frameElements = inspected.filter(e => e.matches('iframe,frame'));
-  // Text alone is never a challenge signal: ordinary articles quote these phrases.
-  const challengeFrame = inspected.some(e => e.matches('iframe') && visible(e) && inViewport(e) &&
-    /https:\/\/(?:[^/]*\.)?(?:google\.com|recaptcha\.net)\/(?:recaptcha\/)(?:api2|enterprise)\/(?:anchor|bframe)|https:\/\/[^/]*hcaptcha\.com\/.*captcha|https:\/\/challenges\.cloudflare\.com\/.*turnstile/i.test(e.getAttribute('src') || ''));
-  const challengeControl = inspected.some(e => !protectedElement(e) && visible(e) && inViewport(e) &&
-    e.matches('input,button,[role=checkbox]') && /captcha|cf-chl|challenge-response/i.test([e.name,e.id].join(' ')));
-  const blockPanel = inspected.some(e => !protectedElement(e) && visible(e) && inViewport(e) &&
-    e.matches('form,[role=alert],[role=dialog],#challenge-form,#cf-error-details') &&
-    /automated queries|automated traffic|automation access.*blocked/i.test(accessibleName(e)));
   return {elements, frame_elements:[...frameElements].slice(0,17), data: {url: location.href, title: document.title,
     frame_count:frameElements.length,
     frame_protected:frameElements.slice(0,17).map(protectedElement),
     _form_states: formStates, _forms: ownForms, form_state_complete: formStateComplete,
     readable_frames: 0, frame_reading_truncated: false,
-    text: bodyText, text_scan_truncated: publicText.truncated,
+    text: !options.reader && ['interactive','visual'].includes(options.mode) ? '' : publicText.text,
+    text_scan_truncated: publicText.truncated, sensitive_text:sensitiveText,
     semantic_text: semantic.text, semantic_source: root ? root.tagName.toLowerCase() : null,
     semantic_source_truncated: semantic.truncated,
     ...(options.collect_links ? {reader_links:readerLinks,reader_links_truncated:readerLinksTruncated} : {}),
@@ -582,7 +593,7 @@
     privacy_epoch:globalThis.__cloudBrowserState.privacyEpoch,
     viewport: {width:innerWidth,height:innerHeight},
     scroll: {x:scrollX,y:scrollY}, height: document.documentElement.scrollHeight,
-    challenge: challengeFrame || (challengeControl && /verify (that )?you are human|complete the captcha|prove you.re not a robot/i.test(bodyText)) ? 'captcha' : blockPanel ? 'bot' : null,
+    challenge,
     has_iframe: inspected.some(e => e.matches('iframe,frame,object,embed')), iframe_regions: frames,
     has_canvas: inspected.some(e => e.matches('canvas,video') && !protectedElement(e) && visible(e)),
     interactive_truncated: queryScanTruncated || queried.length > elements.length,

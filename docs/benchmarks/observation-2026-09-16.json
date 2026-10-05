@@ -1,0 +1,1379 @@
+{
+  "schema_version": 1,
+  "date": "2026-09-16",
+  "source_dataset": "validated",
+  "scope": "Local Windows actual headless Chrome; synthetic fixture and isolated worker only. Not Pi or full MCP service performance.",
+  "environment": {
+    "platform": "Windows-11-10.0.26200-SP0",
+    "python": "3.13.11",
+    "drissionpage": "4.1.1.4",
+    "psutil": "7.2.2",
+    "browser_version": "Chrome/152.0.7977.83"
+  },
+  "baseline_commit": "08f536200fd920835d30fb6e2555d0890434e921",
+  "source_sha256": {
+    "baseline": {
+      "config.py": "84f2a85f4f8296fe09e32be2f971e3664f7e1403bbe9add1520d5459641ec3b1",
+      "service.py": "40388c50b6a225a7c0dac2870d880c701e11aae0bd6976f1eefb25eee8bfd946",
+      "worker.py": "bb40ed3eef74d91494ed81edb19010c18a26013d6be6acce6ebacb9fe151af94",
+      "drission.py": "5222c24e678d1512ae015d80c483bce8ad92d0c4b07b2b3b4546957d51d162e5",
+      "snapshot.js": "dc4bd6311464a3d1ca881119fba4a4ea1fecd129181e468e3f74fde12f350118"
+    },
+    "candidate": {
+      "config.py": "7e01f82765954f591506868b03ec5642c2dfbd5d16e55dfd118cd78e45c28db7",
+      "service.py": "9c10d546578f3ac72de7b3953da3692f5e31af149f62008d32d2b40b7e8a4292",
+      "worker.py": "bb40ed3eef74d91494ed81edb19010c18a26013d6be6acce6ebacb9fe151af94",
+      "drission.py": "50bdaa8f0b7f3ae3cce35bb2ebf2e3e8f83d2ac80463c92b9aec4fc9faebb78f",
+      "snapshot.js": "0e985fbd6aec73551fa776071f10f324504e75012edbc03248c93866d6d62f6e"
+    }
+  },
+  "source_hash_verification": "Every recorded source hash in all 14 validated reports matches the current baseline or candidate file.",
+  "harness_sha256": {
+    "observation": "4f6f38b8260420f9da1fa862b53f62c56dd91c2384ef178a3be77129dc667b05",
+    "idle": "a6cf94e726b27edca146069108e3e64eb9cba2978810c0ad53820fc18ecccff7"
+  },
+  "method": {
+    "independent_trials_per_variant": 3,
+    "measured_iterations_per_phase_per_trial": 5,
+    "warmup_iterations": 1,
+    "measured_phases": 7,
+    "measured_operations_per_trial": 35,
+    "trial_order": [
+      [
+        "baseline",
+        "candidate"
+      ],
+      [
+        "candidate",
+        "baseline"
+      ],
+      [
+        "baseline",
+        "candidate"
+      ]
+    ],
+    "fixture_version": 1,
+    "viewport": {
+      "width": 1024,
+      "height": 768
+    },
+    "screenshot_quality": 75,
+    "max_chars": 30000,
+    "wait_ms": 100,
+    "url_wait_timeout_ms": 700,
+    "process_sample_interval_seconds": 0.5,
+    "observation_wall_cpu_cdp_meter_enabled": false,
+    "idle_grace_seconds": 2,
+    "idle_sweep_interval_seconds": 1,
+    "idle_cycles_per_trial": 2,
+    "separate_metered_trials_per_variant": 1,
+    "metered_iterations_per_phase": 5,
+    "wall_aggregation": "Median and range of three independent trial medians.",
+    "cpu_aggregation": "Median and range of each trial's combined harness and observed browser CPU across 35 measured operations.",
+    "uss_aggregation": "Median and range of each whole trial's simultaneous sampled USS sum peak; includes setup, warmup, and cleanup."
+  },
+  "summary": {
+    "observation": {
+      "baseline": {
+        "aggregate_cpu_seconds_per_trial": {
+          "median": 12.390625,
+          "min": 12.234375,
+          "max": 12.90625
+        },
+        "phase_wall_milliseconds": {
+          "check_protocol": {
+            "median": 547.9027,
+            "min": 538.701,
+            "max": 554.2009
+          },
+          "fill_protocol": {
+            "median": 544.7113,
+            "min": 531.6799,
+            "max": 564.135
+          },
+          "interactive": {
+            "median": 136.3061,
+            "min": 110.2558,
+            "max": 143.4356
+          },
+          "semantic": {
+            "median": 190.8683,
+            "min": 164.9567,
+            "max": 200.1436
+          },
+          "targeted": {
+            "median": 53.5025,
+            "min": 50.6401,
+            "max": 69.476
+          },
+          "url_wait_timeout": {
+            "median": 785.4104,
+            "min": 733.9536,
+            "max": 797.9376
+          },
+          "visual": {
+            "median": 236.9167,
+            "min": 230.8292,
+            "max": 257.4124
+          }
+        },
+        "phase_cpu_milliseconds_per_operation": {
+          "check_protocol": {
+            "median": 637.5,
+            "min": 621.875,
+            "max": 671.875
+          },
+          "fill_protocol": {
+            "median": 596.875,
+            "min": 590.625,
+            "max": 603.125
+          },
+          "interactive": {
+            "median": 159.375,
+            "min": 153.125,
+            "max": 175
+          },
+          "semantic": {
+            "median": 209.375,
+            "min": 209.375,
+            "max": 225
+          },
+          "targeted": {
+            "median": 93.75,
+            "min": 93.75,
+            "max": 96.875
+          },
+          "url_wait_timeout": {
+            "median": 481.25,
+            "min": 465.625,
+            "max": 606.25
+          },
+          "visual": {
+            "median": 278.125,
+            "min": 253.125,
+            "max": 284.375
+          }
+        },
+        "sampled_whole_trial_uss_peak_mib": {
+          "median": 316.953125,
+          "min": 311.636719,
+          "max": 322.726563
+        }
+      },
+      "candidate": {
+        "aggregate_cpu_seconds_per_trial": {
+          "median": 9.734375,
+          "min": 9.609375,
+          "max": 10.046875
+        },
+        "phase_wall_milliseconds": {
+          "check_protocol": {
+            "median": 486.7041,
+            "min": 474.6771,
+            "max": 487.8488
+          },
+          "fill_protocol": {
+            "median": 482.071,
+            "min": 471.8122,
+            "max": 559.6274
+          },
+          "interactive": {
+            "median": 81.4714,
+            "min": 79.3231,
+            "max": 106.816
+          },
+          "semantic": {
+            "median": 174.6209,
+            "min": 170.5687,
+            "max": 203.6668
+          },
+          "targeted": {
+            "median": 17.611,
+            "min": 17.4529,
+            "max": 18.7066
+          },
+          "url_wait_timeout": {
+            "median": 765.6815,
+            "min": 761.5249,
+            "max": 770.4332
+          },
+          "visual": {
+            "median": 176.4008,
+            "min": 171.3659,
+            "max": 200.1938
+          }
+        },
+        "phase_cpu_milliseconds_per_operation": {
+          "check_protocol": {
+            "median": 446.875,
+            "min": 443.75,
+            "max": 459.375
+          },
+          "fill_protocol": {
+            "median": 562.5,
+            "min": 553.125,
+            "max": 568.75
+          },
+          "interactive": {
+            "median": 165.625,
+            "min": 150,
+            "max": 175
+          },
+          "semantic": {
+            "median": 268.75,
+            "min": 262.5,
+            "max": 309.375
+          },
+          "targeted": {
+            "median": 59.375,
+            "min": 50,
+            "max": 71.875
+          },
+          "url_wait_timeout": {
+            "median": 203.125,
+            "min": 168.75,
+            "max": 256.25
+          },
+          "visual": {
+            "median": 234.375,
+            "min": 228.125,
+            "max": 240.625
+          }
+        },
+        "sampled_whole_trial_uss_peak_mib": {
+          "median": 309.847656,
+          "min": 308.941406,
+          "max": 311.710938
+        }
+      }
+    },
+    "idle": {
+      "baseline": {
+        "first_open_milliseconds": {
+          "median": 1529.219,
+          "min": 1499.92,
+          "max": 1650.806
+        },
+        "reopen_milliseconds": {
+          "median": 730.386,
+          "min": 707.968,
+          "max": 737.406
+        },
+        "after_grace_uss_mib_all_six_cycles": {
+          "median": 40.259766,
+          "min": 40.113281,
+          "max": 40.414063
+        },
+        "after_grace_process_counts": [
+          1,
+          1,
+          1,
+          1,
+          1,
+          1
+        ]
+      },
+      "candidate": {
+        "first_open_milliseconds": {
+          "median": 1492.495,
+          "min": 1491.284,
+          "max": 1523.048
+        },
+        "reopen_milliseconds": {
+          "median": 1508.352,
+          "min": 1484.898,
+          "max": 1592.809
+        },
+        "after_grace_uss_mib_all_six_cycles": {
+          "median": 0,
+          "min": 0,
+          "max": 0
+        },
+        "after_grace_process_counts": [
+          0,
+          0,
+          0,
+          0,
+          0,
+          0
+        ]
+      }
+    },
+    "cdp_per_operation": {
+      "baseline": {
+        "check_protocol": {
+          "mean_calls_per_operation": 140,
+          "mean_snapshot_payload_bytes_per_operation": 1838484.8
+        },
+        "fill_protocol": {
+          "mean_calls_per_operation": 141,
+          "mean_snapshot_payload_bytes_per_operation": 1838588
+        },
+        "interactive": {
+          "mean_calls_per_operation": 126,
+          "mean_snapshot_payload_bytes_per_operation": 267215.8
+        },
+        "semantic": {
+          "mean_calls_per_operation": 126,
+          "mean_snapshot_payload_bytes_per_operation": 495259.8
+        },
+        "targeted": {
+          "mean_calls_per_operation": 24,
+          "mean_snapshot_payload_bytes_per_operation": 230890.4
+        },
+        "url_wait_timeout": {
+          "mean_calls_per_operation": 273.6,
+          "mean_snapshot_payload_bytes_per_operation": 961973.2
+        },
+        "visual": {
+          "mean_calls_per_operation": 149,
+          "mean_snapshot_payload_bytes_per_operation": 534431.6
+        }
+      },
+      "candidate": {
+        "check_protocol": {
+          "mean_calls_per_operation": 140,
+          "mean_snapshot_payload_bytes_per_operation": 1381074.8
+        },
+        "fill_protocol": {
+          "mean_calls_per_operation": 141,
+          "mean_snapshot_payload_bytes_per_operation": 1381178
+        },
+        "interactive": {
+          "mean_calls_per_operation": 126,
+          "mean_snapshot_payload_bytes_per_operation": 38441.8
+        },
+        "semantic": {
+          "mean_calls_per_operation": 126,
+          "mean_snapshot_payload_bytes_per_operation": 495305.8
+        },
+        "targeted": {
+          "mean_calls_per_operation": 24,
+          "mean_snapshot_payload_bytes_per_operation": 2116.4
+        },
+        "url_wait_timeout": {
+          "mean_calls_per_operation": 91,
+          "mean_snapshot_payload_bytes_per_operation": 38440.8
+        },
+        "visual": {
+          "mean_calls_per_operation": 149,
+          "mean_snapshot_payload_bytes_per_operation": 76883.6
+        }
+      }
+    },
+    "aggregate_cpu_median_reduction_percent": 21.437579,
+    "reopen_median_increase_milliseconds": 777.966,
+    "active_work_memory_conclusion": "No established active-work RAM reduction: whole-trial sampled USS peaks are not steady-state active memory, and the ranges partly overlap.",
+    "idle_memory_conclusion": "After grace, the baseline retained one worker at about 40.1-40.4 MiB USS in every cycle; the candidate had zero owned processes and zero USS with no inspection errors. Scope excludes the parent service."
+  },
+  "observation_trials": [
+    {
+      "variant": "baseline",
+      "trial": 1,
+      "result": "completed",
+      "cdp_meter_enabled": false,
+      "phase_summaries": {
+        "check_protocol": {
+          "count": 5,
+          "wall_total_seconds": 2.8197870000039984,
+          "wall_median_seconds": 0.55420089999825,
+          "wall_min_seconds": 0.5438286999997217,
+          "wall_max_seconds": 0.5983680000026652,
+          "harness_cpu_seconds": 2.015625,
+          "browser_cpu_seconds": 1.09375
+        },
+        "fill_protocol": {
+          "count": 5,
+          "wall_total_seconds": 2.863077500005602,
+          "wall_median_seconds": 0.5641350000005332,
+          "wall_min_seconds": 0.5519367000015336,
+          "wall_max_seconds": 0.6035179000027711,
+          "harness_cpu_seconds": 2.09375,
+          "browser_cpu_seconds": 0.859375
+        },
+        "interactive": {
+          "count": 5,
+          "wall_total_seconds": 0.7029137999998056,
+          "wall_median_seconds": 0.14343559999906574,
+          "wall_min_seconds": 0.11065190000226721,
+          "wall_max_seconds": 0.167065099998581,
+          "harness_cpu_seconds": 0.609375,
+          "browser_cpu_seconds": 0.265625
+        },
+        "semantic": {
+          "count": 5,
+          "wall_total_seconds": 0.8312322000019776,
+          "wall_median_seconds": 0.16495670000222162,
+          "wall_min_seconds": 0.1588984000009077,
+          "wall_max_seconds": 0.18030699999872013,
+          "harness_cpu_seconds": 0.734375,
+          "browser_cpu_seconds": 0.3125
+        },
+        "targeted": {
+          "count": 5,
+          "wall_total_seconds": 0.3435065999983635,
+          "wall_median_seconds": 0.06947599999693921,
+          "wall_min_seconds": 0.052895600001647836,
+          "wall_max_seconds": 0.08185489999959827,
+          "harness_cpu_seconds": 0.421875,
+          "browser_cpu_seconds": 0.046875
+        },
+        "url_wait_timeout": {
+          "count": 5,
+          "wall_total_seconds": 4.053159599996434,
+          "wall_median_seconds": 0.7979376000002958,
+          "wall_min_seconds": 0.7863316999973904,
+          "wall_max_seconds": 0.855446599998686,
+          "harness_cpu_seconds": 1.75,
+          "browser_cpu_seconds": 1.28125
+        },
+        "visual": {
+          "count": 5,
+          "wall_total_seconds": 1.2967267999956675,
+          "wall_median_seconds": 0.25741239999842946,
+          "wall_min_seconds": 0.2411123999991105,
+          "wall_max_seconds": 0.28180799999972805,
+          "harness_cpu_seconds": 0.953125,
+          "browser_cpu_seconds": 0.46875
+        }
+      },
+      "aggregate_measured_cpu_seconds": 12.90625,
+      "sampled_whole_trial_peak_bytes": {
+        "uss": 332349440,
+        "pss": null
+      },
+      "cleanup": {
+        "remaining_child_count": 0,
+        "temporary_profile_removed": true
+      }
+    },
+    {
+      "variant": "baseline",
+      "trial": 2,
+      "result": "completed",
+      "cdp_meter_enabled": false,
+      "phase_summaries": {
+        "check_protocol": {
+          "count": 5,
+          "wall_total_seconds": 2.8930370999951265,
+          "wall_median_seconds": 0.5387010000013106,
+          "wall_min_seconds": 0.5276004999977886,
+          "wall_max_seconds": 0.6736545999992813,
+          "harness_cpu_seconds": 1.96875,
+          "browser_cpu_seconds": 1.390625
+        },
+        "fill_protocol": {
+          "count": 5,
+          "wall_total_seconds": 2.7632188999996288,
+          "wall_median_seconds": 0.5316798999992898,
+          "wall_min_seconds": 0.49465150000105496,
+          "wall_max_seconds": 0.6307540999987395,
+          "harness_cpu_seconds": 1.84375,
+          "browser_cpu_seconds": 1.140625
+        },
+        "interactive": {
+          "count": 5,
+          "wall_total_seconds": 0.586834000008821,
+          "wall_median_seconds": 0.11025580000205082,
+          "wall_min_seconds": 0.10870860000068205,
+          "wall_max_seconds": 0.1367009000023245,
+          "harness_cpu_seconds": 0.4375,
+          "browser_cpu_seconds": 0.359375
+        },
+        "semantic": {
+          "count": 5,
+          "wall_total_seconds": 0.9151021999969089,
+          "wall_median_seconds": 0.19086830000014743,
+          "wall_min_seconds": 0.16829109999889624,
+          "wall_max_seconds": 0.1944919999987178,
+          "harness_cpu_seconds": 0.828125,
+          "browser_cpu_seconds": 0.21875
+        },
+        "targeted": {
+          "count": 5,
+          "wall_total_seconds": 0.2679759999991802,
+          "wall_median_seconds": 0.05064010000205599,
+          "wall_min_seconds": 0.049842999997053994,
+          "wall_max_seconds": 0.06251639999754843,
+          "harness_cpu_seconds": 0.421875,
+          "browser_cpu_seconds": 0.0625
+        },
+        "url_wait_timeout": {
+          "count": 5,
+          "wall_total_seconds": 3.755893000001379,
+          "wall_median_seconds": 0.7339535999999498,
+          "wall_min_seconds": 0.707336799998302,
+          "wall_max_seconds": 0.8114462000012281,
+          "harness_cpu_seconds": 1.40625,
+          "browser_cpu_seconds": 0.921875
+        },
+        "visual": {
+          "count": 5,
+          "wall_total_seconds": 1.268812499998603,
+          "wall_median_seconds": 0.23691669999971054,
+          "wall_min_seconds": 0.22670540000035544,
+          "wall_max_seconds": 0.30470040000000154,
+          "harness_cpu_seconds": 1,
+          "browser_cpu_seconds": 0.390625
+        }
+      },
+      "aggregate_measured_cpu_seconds": 12.390625,
+      "sampled_whole_trial_peak_bytes": {
+        "uss": 338403328,
+        "pss": null
+      },
+      "cleanup": {
+        "remaining_child_count": 0,
+        "temporary_profile_removed": true
+      }
+    },
+    {
+      "variant": "baseline",
+      "trial": 3,
+      "result": "completed",
+      "cdp_meter_enabled": false,
+      "phase_summaries": {
+        "check_protocol": {
+          "count": 5,
+          "wall_total_seconds": 2.805893000004289,
+          "wall_median_seconds": 0.5479027000001224,
+          "wall_min_seconds": 0.5335367000006954,
+          "wall_max_seconds": 0.6099739000019326,
+          "harness_cpu_seconds": 1.9375,
+          "browser_cpu_seconds": 1.25
+        },
+        "fill_protocol": {
+          "count": 5,
+          "wall_total_seconds": 2.740856700005679,
+          "wall_median_seconds": 0.5447113000009267,
+          "wall_min_seconds": 0.5178366000000096,
+          "wall_max_seconds": 0.5808770000003278,
+          "harness_cpu_seconds": 1.921875,
+          "browser_cpu_seconds": 1.09375
+        },
+        "interactive": {
+          "count": 5,
+          "wall_total_seconds": 0.6386975000023085,
+          "wall_median_seconds": 0.136306100001093,
+          "wall_min_seconds": 0.10874279999916325,
+          "wall_max_seconds": 0.1433394000014232,
+          "harness_cpu_seconds": 0.578125,
+          "browser_cpu_seconds": 0.1875
+        },
+        "semantic": {
+          "count": 5,
+          "wall_total_seconds": 0.9782040999998571,
+          "wall_median_seconds": 0.2001436000027752,
+          "wall_min_seconds": 0.18019649999769172,
+          "wall_max_seconds": 0.20661440000185394,
+          "harness_cpu_seconds": 0.796875,
+          "browser_cpu_seconds": 0.328125
+        },
+        "targeted": {
+          "count": 5,
+          "wall_total_seconds": 0.29819149999821093,
+          "wall_median_seconds": 0.0535024999990128,
+          "wall_min_seconds": 0.04984150000018417,
+          "wall_max_seconds": 0.0910610999999335,
+          "harness_cpu_seconds": 0.421875,
+          "browser_cpu_seconds": 0.046875
+        },
+        "url_wait_timeout": {
+          "count": 5,
+          "wall_total_seconds": 3.8335186000003887,
+          "wall_median_seconds": 0.7854103999998188,
+          "wall_min_seconds": 0.7050229999986186,
+          "wall_max_seconds": 0.8154400000021269,
+          "harness_cpu_seconds": 1.546875,
+          "browser_cpu_seconds": 0.859375
+        },
+        "visual": {
+          "count": 5,
+          "wall_total_seconds": 1.1944604999953299,
+          "wall_median_seconds": 0.23082920000160811,
+          "wall_min_seconds": 0.21988859999692068,
+          "wall_max_seconds": 0.2623335999996925,
+          "harness_cpu_seconds": 0.875,
+          "browser_cpu_seconds": 0.390625
+        }
+      },
+      "aggregate_measured_cpu_seconds": 12.234375,
+      "sampled_whole_trial_peak_bytes": {
+        "uss": 326774784,
+        "pss": null
+      },
+      "cleanup": {
+        "remaining_child_count": 0,
+        "temporary_profile_removed": true
+      }
+    },
+    {
+      "variant": "candidate",
+      "trial": 1,
+      "result": "completed",
+      "cdp_meter_enabled": false,
+      "phase_summaries": {
+        "check_protocol": {
+          "count": 5,
+          "wall_total_seconds": 2.508651200001623,
+          "wall_median_seconds": 0.4867040999997698,
+          "wall_min_seconds": 0.4628383000017493,
+          "wall_max_seconds": 0.5666813999996521,
+          "harness_cpu_seconds": 1.640625,
+          "browser_cpu_seconds": 0.578125
+        },
+        "fill_protocol": {
+          "count": 5,
+          "wall_total_seconds": 2.4733287999988534,
+          "wall_median_seconds": 0.4820709999985411,
+          "wall_min_seconds": 0.4415413000024273,
+          "wall_max_seconds": 0.5564822999986063,
+          "harness_cpu_seconds": 1.609375,
+          "browser_cpu_seconds": 1.203125
+        },
+        "interactive": {
+          "count": 5,
+          "wall_total_seconds": 0.5124362000024121,
+          "wall_median_seconds": 0.10681599999952596,
+          "wall_min_seconds": 0.07701010000164388,
+          "wall_max_seconds": 0.13336799999888171,
+          "harness_cpu_seconds": 0.40625,
+          "browser_cpu_seconds": 0.46875
+        },
+        "semantic": {
+          "count": 5,
+          "wall_total_seconds": 0.909475200005545,
+          "wall_median_seconds": 0.17462090000117314,
+          "wall_min_seconds": 0.16507480000291253,
+          "wall_max_seconds": 0.22497500000099535,
+          "harness_cpu_seconds": 0.796875,
+          "browser_cpu_seconds": 0.515625
+        },
+        "targeted": {
+          "count": 5,
+          "wall_total_seconds": 0.0942226000042865,
+          "wall_median_seconds": 0.018706599999859463,
+          "wall_min_seconds": 0.016683000001648907,
+          "wall_max_seconds": 0.021623399999953108,
+          "harness_cpu_seconds": 0.1875,
+          "browser_cpu_seconds": 0.171875
+        },
+        "url_wait_timeout": {
+          "count": 5,
+          "wall_total_seconds": 3.8362344999986817,
+          "wall_median_seconds": 0.7704331999993883,
+          "wall_min_seconds": 0.7573335000015504,
+          "wall_max_seconds": 0.7758844999989378,
+          "harness_cpu_seconds": 0.546875,
+          "browser_cpu_seconds": 0.46875
+        },
+        "visual": {
+          "count": 5,
+          "wall_total_seconds": 0.9360240999994858,
+          "wall_median_seconds": 0.20019379999939702,
+          "wall_min_seconds": 0.15578309999909834,
+          "wall_max_seconds": 0.21849229999861564,
+          "harness_cpu_seconds": 0.671875,
+          "browser_cpu_seconds": 0.46875
+        }
+      },
+      "aggregate_measured_cpu_seconds": 9.734375,
+      "sampled_whole_trial_peak_bytes": {
+        "uss": 326852608,
+        "pss": null
+      },
+      "cleanup": {
+        "remaining_child_count": 0,
+        "temporary_profile_removed": true
+      }
+    },
+    {
+      "variant": "candidate",
+      "trial": 2,
+      "result": "completed",
+      "cdp_meter_enabled": false,
+      "phase_summaries": {
+        "check_protocol": {
+          "count": 5,
+          "wall_total_seconds": 2.3612764999925275,
+          "wall_median_seconds": 0.4746770999990986,
+          "wall_min_seconds": 0.4598566999993636,
+          "wall_max_seconds": 0.48190839999733726,
+          "harness_cpu_seconds": 1.59375,
+          "browser_cpu_seconds": 0.703125
+        },
+        "fill_protocol": {
+          "count": 5,
+          "wall_total_seconds": 2.4346456000057515,
+          "wall_median_seconds": 0.4718122000012954,
+          "wall_min_seconds": 0.4606046000008064,
+          "wall_max_seconds": 0.5438699000005727,
+          "harness_cpu_seconds": 1.5625,
+          "browser_cpu_seconds": 1.28125
+        },
+        "interactive": {
+          "count": 5,
+          "wall_total_seconds": 0.47537179999926593,
+          "wall_median_seconds": 0.08147140000073705,
+          "wall_min_seconds": 0.07519949999914388,
+          "wall_max_seconds": 0.1341260000008333,
+          "harness_cpu_seconds": 0.421875,
+          "browser_cpu_seconds": 0.40625
+        },
+        "semantic": {
+          "count": 5,
+          "wall_total_seconds": 0.9375005999936548,
+          "wall_median_seconds": 0.17056869999942137,
+          "wall_min_seconds": 0.16106849999778206,
+          "wall_max_seconds": 0.22399600000062492,
+          "harness_cpu_seconds": 0.75,
+          "browser_cpu_seconds": 0.59375
+        },
+        "targeted": {
+          "count": 5,
+          "wall_total_seconds": 0.09254610000061803,
+          "wall_median_seconds": 0.017610999999305932,
+          "wall_min_seconds": 0.017105200000514742,
+          "wall_max_seconds": 0.022026300001016352,
+          "harness_cpu_seconds": 0.203125,
+          "browser_cpu_seconds": 0.046875
+        },
+        "url_wait_timeout": {
+          "count": 5,
+          "wall_total_seconds": 3.8210387000035553,
+          "wall_median_seconds": 0.7656815000009374,
+          "wall_min_seconds": 0.7557774000015343,
+          "wall_max_seconds": 0.7737813999992795,
+          "harness_cpu_seconds": 0.5625,
+          "browser_cpu_seconds": 0.28125
+        },
+        "visual": {
+          "count": 5,
+          "wall_total_seconds": 0.8882079999966663,
+          "wall_median_seconds": 0.17136589999790885,
+          "wall_min_seconds": 0.15552399999796762,
+          "wall_max_seconds": 0.21836590000020806,
+          "harness_cpu_seconds": 0.59375,
+          "browser_cpu_seconds": 0.609375
+        }
+      },
+      "aggregate_measured_cpu_seconds": 9.609375,
+      "sampled_whole_trial_peak_bytes": {
+        "uss": 323948544,
+        "pss": null
+      },
+      "cleanup": {
+        "remaining_child_count": 0,
+        "temporary_profile_removed": true
+      }
+    },
+    {
+      "variant": "candidate",
+      "trial": 3,
+      "result": "completed",
+      "cdp_meter_enabled": false,
+      "phase_summaries": {
+        "check_protocol": {
+          "count": 5,
+          "wall_total_seconds": 2.45753230000264,
+          "wall_median_seconds": 0.48784879999948316,
+          "wall_min_seconds": 0.46041540000078385,
+          "wall_max_seconds": 0.5309441000026709,
+          "harness_cpu_seconds": 1.625,
+          "browser_cpu_seconds": 0.609375
+        },
+        "fill_protocol": {
+          "count": 5,
+          "wall_total_seconds": 2.671149100002367,
+          "wall_median_seconds": 0.5596273999981349,
+          "wall_min_seconds": 0.457710999999108,
+          "wall_max_seconds": 0.6143379000022833,
+          "harness_cpu_seconds": 1.8125,
+          "browser_cpu_seconds": 0.953125
+        },
+        "interactive": {
+          "count": 5,
+          "wall_total_seconds": 0.40319909999743686,
+          "wall_median_seconds": 0.07932309999887366,
+          "wall_min_seconds": 0.07395739999992657,
+          "wall_max_seconds": 0.091809599998669,
+          "harness_cpu_seconds": 0.28125,
+          "browser_cpu_seconds": 0.46875
+        },
+        "semantic": {
+          "count": 5,
+          "wall_total_seconds": 1.0077797999983886,
+          "wall_median_seconds": 0.20366680000006454,
+          "wall_min_seconds": 0.16289400000096066,
+          "wall_max_seconds": 0.2668091000014101,
+          "harness_cpu_seconds": 0.796875,
+          "browser_cpu_seconds": 0.75
+        },
+        "targeted": {
+          "count": 5,
+          "wall_total_seconds": 0.09053929999936372,
+          "wall_median_seconds": 0.017452899999625515,
+          "wall_min_seconds": 0.017232700000022305,
+          "wall_max_seconds": 0.020605599998816615,
+          "harness_cpu_seconds": 0.203125,
+          "browser_cpu_seconds": 0.09375
+        },
+        "url_wait_timeout": {
+          "count": 5,
+          "wall_total_seconds": 3.8632336000046053,
+          "wall_median_seconds": 0.7615249000009499,
+          "wall_min_seconds": 0.7570249000018521,
+          "wall_max_seconds": 0.8031921000001603,
+          "harness_cpu_seconds": 0.671875,
+          "browser_cpu_seconds": 0.609375
+        },
+        "visual": {
+          "count": 5,
+          "wall_total_seconds": 0.8452495999990788,
+          "wall_median_seconds": 0.17640080000273883,
+          "wall_min_seconds": 0.1484452999975474,
+          "wall_max_seconds": 0.19033140000101412,
+          "harness_cpu_seconds": 0.5625,
+          "browser_cpu_seconds": 0.609375
+        }
+      },
+      "aggregate_measured_cpu_seconds": 10.046875,
+      "sampled_whole_trial_peak_bytes": {
+        "uss": 324898816,
+        "pss": null
+      },
+      "cleanup": {
+        "remaining_child_count": 0,
+        "temporary_profile_removed": true
+      }
+    }
+  ],
+  "idle_trials": [
+    {
+      "variant": "baseline",
+      "trial": 1,
+      "cycles": [
+        {
+          "cycle": 1,
+          "open_ms": 1499.92,
+          "active": {
+            "process_count": 11,
+            "inspection_errors": 0,
+            "rss_bytes": 634380288,
+            "uss_bytes": 199364608,
+            "pss_bytes": null
+          },
+          "closed_before_grace": {
+            "process_count": 1,
+            "inspection_errors": 0,
+            "rss_bytes": 64061440,
+            "uss_bytes": 42156032,
+            "pss_bytes": null
+          },
+          "closed_after_grace": {
+            "process_count": 1,
+            "inspection_errors": 0,
+            "rss_bytes": 64061440,
+            "uss_bytes": 42156032,
+            "pss_bytes": null
+          }
+        },
+        {
+          "cycle": 2,
+          "open_ms": 707.968,
+          "active": {
+            "process_count": 11,
+            "inspection_errors": 0,
+            "rss_bytes": 632430592,
+            "uss_bytes": 199790592,
+            "pss_bytes": null
+          },
+          "closed_before_grace": {
+            "process_count": 1,
+            "inspection_errors": 0,
+            "rss_bytes": 64155648,
+            "uss_bytes": 42250240,
+            "pss_bytes": null
+          },
+          "closed_after_grace": {
+            "process_count": 1,
+            "inspection_errors": 0,
+            "rss_bytes": 64155648,
+            "uss_bytes": 42250240,
+            "pss_bytes": null
+          }
+        }
+      ],
+      "cleanup_complete": true,
+      "final_process_check": {
+        "process_count": 0,
+        "inspection_errors": 0,
+        "rss_bytes": 0,
+        "uss_bytes": 0,
+        "pss_bytes": null
+      }
+    },
+    {
+      "variant": "baseline",
+      "trial": 2,
+      "cycles": [
+        {
+          "cycle": 1,
+          "open_ms": 1650.806,
+          "active": {
+            "process_count": 11,
+            "inspection_errors": 0,
+            "rss_bytes": 628948992,
+            "uss_bytes": 199831552,
+            "pss_bytes": null
+          },
+          "closed_before_grace": {
+            "process_count": 1,
+            "inspection_errors": 0,
+            "rss_bytes": 63971328,
+            "uss_bytes": 42061824,
+            "pss_bytes": null
+          },
+          "closed_after_grace": {
+            "process_count": 1,
+            "inspection_errors": 0,
+            "rss_bytes": 63971328,
+            "uss_bytes": 42061824,
+            "pss_bytes": null
+          }
+        },
+        {
+          "cycle": 2,
+          "open_ms": 730.386,
+          "active": {
+            "process_count": 11,
+            "inspection_errors": 0,
+            "rss_bytes": 637050880,
+            "uss_bytes": 201957376,
+            "pss_bytes": null
+          },
+          "closed_before_grace": {
+            "process_count": 1,
+            "inspection_errors": 0,
+            "rss_bytes": 64143360,
+            "uss_bytes": 42233856,
+            "pss_bytes": null
+          },
+          "closed_after_grace": {
+            "process_count": 1,
+            "inspection_errors": 0,
+            "rss_bytes": 64143360,
+            "uss_bytes": 42233856,
+            "pss_bytes": null
+          }
+        }
+      ],
+      "cleanup_complete": true,
+      "final_process_check": {
+        "process_count": 0,
+        "inspection_errors": 0,
+        "rss_bytes": 0,
+        "uss_bytes": 0,
+        "pss_bytes": null
+      }
+    },
+    {
+      "variant": "baseline",
+      "trial": 3,
+      "cycles": [
+        {
+          "cycle": 1,
+          "open_ms": 1529.219,
+          "active": {
+            "process_count": 11,
+            "inspection_errors": 0,
+            "rss_bytes": 630358016,
+            "uss_bytes": 201240576,
+            "pss_bytes": null
+          },
+          "closed_before_grace": {
+            "process_count": 1,
+            "inspection_errors": 0,
+            "rss_bytes": 64102400,
+            "uss_bytes": 42196992,
+            "pss_bytes": null
+          },
+          "closed_after_grace": {
+            "process_count": 1,
+            "inspection_errors": 0,
+            "rss_bytes": 64102400,
+            "uss_bytes": 42196992,
+            "pss_bytes": null
+          }
+        },
+        {
+          "cycle": 2,
+          "open_ms": 737.406,
+          "active": {
+            "process_count": 11,
+            "inspection_errors": 0,
+            "rss_bytes": 634159104,
+            "uss_bytes": 201019392,
+            "pss_bytes": null
+          },
+          "closed_before_grace": {
+            "process_count": 1,
+            "inspection_errors": 0,
+            "rss_bytes": 64282624,
+            "uss_bytes": 42377216,
+            "pss_bytes": null
+          },
+          "closed_after_grace": {
+            "process_count": 1,
+            "inspection_errors": 0,
+            "rss_bytes": 64282624,
+            "uss_bytes": 42377216,
+            "pss_bytes": null
+          }
+        }
+      ],
+      "cleanup_complete": true,
+      "final_process_check": {
+        "process_count": 0,
+        "inspection_errors": 0,
+        "rss_bytes": 0,
+        "uss_bytes": 0,
+        "pss_bytes": null
+      }
+    },
+    {
+      "variant": "candidate",
+      "trial": 1,
+      "cycles": [
+        {
+          "cycle": 1,
+          "open_ms": 1491.284,
+          "active": {
+            "process_count": 11,
+            "inspection_errors": 0,
+            "rss_bytes": 629972992,
+            "uss_bytes": 199938048,
+            "pss_bytes": null
+          },
+          "closed_before_grace": {
+            "process_count": 1,
+            "inspection_errors": 0,
+            "rss_bytes": 64802816,
+            "uss_bytes": 42893312,
+            "pss_bytes": null
+          },
+          "closed_after_grace": {
+            "process_count": 0,
+            "inspection_errors": 0,
+            "rss_bytes": 0,
+            "uss_bytes": 0,
+            "pss_bytes": null
+          }
+        },
+        {
+          "cycle": 2,
+          "open_ms": 1592.809,
+          "active": {
+            "process_count": 11,
+            "inspection_errors": 0,
+            "rss_bytes": 632446976,
+            "uss_bytes": 202412032,
+            "pss_bytes": null
+          },
+          "closed_before_grace": {
+            "process_count": 1,
+            "inspection_errors": 0,
+            "rss_bytes": 64315392,
+            "uss_bytes": 42397696,
+            "pss_bytes": null
+          },
+          "closed_after_grace": {
+            "process_count": 0,
+            "inspection_errors": 0,
+            "rss_bytes": 0,
+            "uss_bytes": 0,
+            "pss_bytes": null
+          }
+        }
+      ],
+      "cleanup_complete": true,
+      "final_process_check": {
+        "process_count": 0,
+        "inspection_errors": 0,
+        "rss_bytes": 0,
+        "uss_bytes": 0,
+        "pss_bytes": null
+      }
+    },
+    {
+      "variant": "candidate",
+      "trial": 2,
+      "cycles": [
+        {
+          "cycle": 1,
+          "open_ms": 1492.495,
+          "active": {
+            "process_count": 11,
+            "inspection_errors": 0,
+            "rss_bytes": 631664640,
+            "uss_bytes": 200974336,
+            "pss_bytes": null
+          },
+          "closed_before_grace": {
+            "process_count": 1,
+            "inspection_errors": 0,
+            "rss_bytes": 64184320,
+            "uss_bytes": 42278912,
+            "pss_bytes": null
+          },
+          "closed_after_grace": {
+            "process_count": 0,
+            "inspection_errors": 0,
+            "rss_bytes": 0,
+            "uss_bytes": 0,
+            "pss_bytes": null
+          }
+        },
+        {
+          "cycle": 2,
+          "open_ms": 1484.898,
+          "active": {
+            "process_count": 11,
+            "inspection_errors": 0,
+            "rss_bytes": 637956096,
+            "uss_bytes": 201048064,
+            "pss_bytes": null
+          },
+          "closed_before_grace": {
+            "process_count": 1,
+            "inspection_errors": 0,
+            "rss_bytes": 64667648,
+            "uss_bytes": 42762240,
+            "pss_bytes": null
+          },
+          "closed_after_grace": {
+            "process_count": 0,
+            "inspection_errors": 0,
+            "rss_bytes": 0,
+            "uss_bytes": 0,
+            "pss_bytes": null
+          }
+        }
+      ],
+      "cleanup_complete": true,
+      "final_process_check": {
+        "process_count": 0,
+        "inspection_errors": 0,
+        "rss_bytes": 0,
+        "uss_bytes": 0,
+        "pss_bytes": null
+      }
+    },
+    {
+      "variant": "candidate",
+      "trial": 3,
+      "cycles": [
+        {
+          "cycle": 1,
+          "open_ms": 1523.048,
+          "active": {
+            "process_count": 11,
+            "inspection_errors": 0,
+            "rss_bytes": 630472704,
+            "uss_bytes": 201183232,
+            "pss_bytes": null
+          },
+          "closed_before_grace": {
+            "process_count": 1,
+            "inspection_errors": 0,
+            "rss_bytes": 64544768,
+            "uss_bytes": 42643456,
+            "pss_bytes": null
+          },
+          "closed_after_grace": {
+            "process_count": 0,
+            "inspection_errors": 0,
+            "rss_bytes": 0,
+            "uss_bytes": 0,
+            "pss_bytes": null
+          }
+        },
+        {
+          "cycle": 2,
+          "open_ms": 1508.352,
+          "active": {
+            "process_count": 11,
+            "inspection_errors": 0,
+            "rss_bytes": 631234560,
+            "uss_bytes": 200753152,
+            "pss_bytes": null
+          },
+          "closed_before_grace": {
+            "process_count": 1,
+            "inspection_errors": 0,
+            "rss_bytes": 64040960,
+            "uss_bytes": 42147840,
+            "pss_bytes": null
+          },
+          "closed_after_grace": {
+            "process_count": 0,
+            "inspection_errors": 0,
+            "rss_bytes": 0,
+            "uss_bytes": 0,
+            "pss_bytes": null
+          }
+        }
+      ],
+      "cleanup_complete": true,
+      "final_process_check": {
+        "process_count": 0,
+        "inspection_errors": 0,
+        "rss_bytes": 0,
+        "uss_bytes": 0,
+        "pss_bytes": null
+      }
+    }
+  ],
+  "metered_trials": [
+    {
+      "variant": "baseline",
+      "result": "completed",
+      "cdp_meter_enabled": true,
+      "iterations": 5,
+      "warmup_iterations": 1,
+      "phases": {
+        "check_protocol": {
+          "count": 5,
+          "cdp_calls": 700,
+          "snapshot_payload_bytes": 9192424,
+          "mean_calls_per_operation": 140,
+          "mean_snapshot_payload_bytes_per_operation": 1838484.8
+        },
+        "fill_protocol": {
+          "count": 5,
+          "cdp_calls": 705,
+          "snapshot_payload_bytes": 9192940,
+          "mean_calls_per_operation": 141,
+          "mean_snapshot_payload_bytes_per_operation": 1838588
+        },
+        "interactive": {
+          "count": 5,
+          "cdp_calls": 630,
+          "snapshot_payload_bytes": 1336079,
+          "mean_calls_per_operation": 126,
+          "mean_snapshot_payload_bytes_per_operation": 267215.8
+        },
+        "semantic": {
+          "count": 5,
+          "cdp_calls": 630,
+          "snapshot_payload_bytes": 2476299,
+          "mean_calls_per_operation": 126,
+          "mean_snapshot_payload_bytes_per_operation": 495259.8
+        },
+        "targeted": {
+          "count": 5,
+          "cdp_calls": 120,
+          "snapshot_payload_bytes": 1154452,
+          "mean_calls_per_operation": 24,
+          "mean_snapshot_payload_bytes_per_operation": 230890.4
+        },
+        "url_wait_timeout": {
+          "count": 5,
+          "cdp_calls": 1368,
+          "snapshot_payload_bytes": 4809866,
+          "mean_calls_per_operation": 273.6,
+          "mean_snapshot_payload_bytes_per_operation": 961973.2
+        },
+        "visual": {
+          "count": 5,
+          "cdp_calls": 745,
+          "snapshot_payload_bytes": 2672158,
+          "mean_calls_per_operation": 149,
+          "mean_snapshot_payload_bytes_per_operation": 534431.6
+        }
+      },
+      "cleanup": {
+        "remaining_child_count": 0,
+        "temporary_profile_removed": true
+      }
+    },
+    {
+      "variant": "candidate",
+      "result": "completed",
+      "cdp_meter_enabled": true,
+      "iterations": 5,
+      "warmup_iterations": 1,
+      "phases": {
+        "check_protocol": {
+          "count": 5,
+          "cdp_calls": 700,
+          "snapshot_payload_bytes": 6905374,
+          "mean_calls_per_operation": 140,
+          "mean_snapshot_payload_bytes_per_operation": 1381074.8
+        },
+        "fill_protocol": {
+          "count": 5,
+          "cdp_calls": 705,
+          "snapshot_payload_bytes": 6905890,
+          "mean_calls_per_operation": 141,
+          "mean_snapshot_payload_bytes_per_operation": 1381178
+        },
+        "interactive": {
+          "count": 5,
+          "cdp_calls": 630,
+          "snapshot_payload_bytes": 192209,
+          "mean_calls_per_operation": 126,
+          "mean_snapshot_payload_bytes_per_operation": 38441.8
+        },
+        "semantic": {
+          "count": 5,
+          "cdp_calls": 630,
+          "snapshot_payload_bytes": 2476529,
+          "mean_calls_per_operation": 126,
+          "mean_snapshot_payload_bytes_per_operation": 495305.8
+        },
+        "targeted": {
+          "count": 5,
+          "cdp_calls": 120,
+          "snapshot_payload_bytes": 10582,
+          "mean_calls_per_operation": 24,
+          "mean_snapshot_payload_bytes_per_operation": 2116.4
+        },
+        "url_wait_timeout": {
+          "count": 5,
+          "cdp_calls": 455,
+          "snapshot_payload_bytes": 192204,
+          "mean_calls_per_operation": 91,
+          "mean_snapshot_payload_bytes_per_operation": 38440.8
+        },
+        "visual": {
+          "count": 5,
+          "cdp_calls": 745,
+          "snapshot_payload_bytes": 384418,
+          "mean_calls_per_operation": 149,
+          "mean_snapshot_payload_bytes_per_operation": 76883.6
+        }
+      },
+      "cleanup": {
+        "remaining_child_count": 0,
+        "temporary_profile_removed": true
+      }
+    }
+  ],
+  "limitations": [
+    "Only the final validated dataset is included. Earlier experimental results are excluded.",
+    "Three independent trials per variant are not 15 independent trials; within-process repetitions are correlated.",
+    "CDP instrumentation is disabled for wall/CPU trials; its omitted counts must not be interpreted as zero browser traffic. The process sampler remains enabled.",
+    "CPU includes fixture-server and sampler overhead, uses short-duration OS counters, and can miss exited processes between samples.",
+    "USS describes private pages, not total physical RAM; RSS sums duplicate shared pages, and unavailable Windows PSS stays null. Samples can miss peaks and uninspectable processes.",
+    "Whole-trial USS includes setup, warmup, and cleanup. It does not establish steady-state active-work RAM savings.",
+    "Idle zero refers to the dedicated worker and its tracked descendants, not the service or host.",
+    "Worker reaping increases next-open latency; production grace/sweep defaults are 30/15 seconds rather than the benchmark's 2/1 seconds.",
+    "Phase results are mixed: semantic CPU median increased from 209.375 to 268.75 milliseconds per operation; no semantic speed improvement is claimed.",
+    "URL timeout latency includes the configured wait and final observation; CPU and command reductions do not imply an earlier specified timeout.",
+    "CDP snapshot byte counts are compact UTF-8 JSON payload estimates, not exact WebSocket wire bytes. One separate metered trial per variant does not estimate population variance.",
+    "Adapter work excludes MCP authentication, transport, production network isolation, and full service overhead. Windows results do not establish Raspberry Pi savings.",
+    "Observation cleanup checks remaining attached children and temporary-profile removal; idle cleanup additionally checks retained process handles. Neither is a host-wide process audit.",
+    "Benchmark success is distinct from regression-suite and CI status; no full-suite or CI completion is asserted here."
+  ]
+}
