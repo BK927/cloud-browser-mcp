@@ -1,0 +1,37 @@
+name: Obscura blocked-engine reproduction (not admission)
+# Manual only: downloads a third-party release, so it does not run on every push.
+on: [workflow_dispatch]
+permissions:
+  contents: read
+jobs:
+  pinned-release-safety-probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - run: pip install uv==0.12.9
+      - run: uv sync --frozen --extra dev --extra browser
+      # Disposable runner only. Archive verified by the probe before execution;
+      # no production profile, OAuth credentials, service routes or external page.
+      - name: Download exact rendering-enabled Linux release
+        run: curl --fail --location --retry 2 --max-time 120 --output "$RUNNER_TEMP/obscura.tar.gz" https://github.com/h4ckf0r0day/obscura/releases/download/v0.2.3/obscura-x86_64-linux.tar.gz
+      - name: Reproduce known blockers and pass the Chromium control
+        env:
+          OBSCURA_TEST_ARCHIVE: ${{ runner.temp }}/obscura.tar.gz
+          CB_TEST_CHROMIUM: /usr/bin/google-chrome
+        run: uv run pytest -q tests/test_obscura_gate.py
+      - name: Save actual blocked result (2), never accept infrastructure failure (1)
+        shell: bash
+        run: |
+          set +e
+          uv run python scripts/obscura_gate.py --engine obscura --archive "$RUNNER_TEMP/obscura.tar.gz" --output "$RUNNER_TEMP/obscura-result.json"
+          result=$?
+          set -e
+          test "$result" = 2
+      - uses: actions/upload-artifact@v4
+        with:
+          name: obscura-blocked-synthetic-evidence
+          path: ${{ runner.temp }}/obscura-result.json

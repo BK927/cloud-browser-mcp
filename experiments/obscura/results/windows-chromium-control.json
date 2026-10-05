@@ -1,0 +1,146 @@
+{
+  "engine": "chromium",
+  "platform": "Windows",
+  "architecture": "AMD64",
+  "binary_sha256": "392dec76f7d4a54f6bc9c360e8d21a56c428173b6c6a90f2be38a2714d606227",
+  "obscura_release": null,
+  "probe_sha256": "597580535f0664986c042a9014cb29a5d826894e53fd276c84a7150e750db5d7",
+  "browser_version": {
+    "protocolVersion": "1.3",
+    "product": "Chrome/153.0.8010.48",
+    "revision": "@199a3a541d76237379e353b348e64045584db057",
+    "userAgent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/153.0.0.0 Safari/537.36",
+    "jsVersion": "15.3.76.12"
+  },
+  "fixture_sha256": "b19360811d91df1b639d623a19abef30e88c2325b4ac3c163f3ff28148bb64cc",
+  "admitted": true,
+  "gates": [
+    {
+      "name": "isolated_world_not_page_global",
+      "passed": true,
+      "evidence": {
+        "marker_type": "undefined"
+      }
+    },
+    {
+      "name": "rendered_fixture",
+      "passed": true,
+      "evidence": {
+        "size": [
+          1024,
+          768
+        ],
+        "pixels": [
+          [
+            0,
+            180,
+            0
+          ],
+          [
+            220,
+            0,
+            0
+          ],
+          [
+            200,
+            0,
+            200
+          ]
+        ]
+      }
+    },
+    {
+      "name": "native_dom_and_full_ax",
+      "passed": true,
+      "evidence": {
+        "ax_node_count": 13,
+        "otp_border": [
+          40,
+          180,
+          240,
+          180,
+          240,
+          220,
+          40,
+          220
+        ]
+      }
+    },
+    {
+      "name": "native_geometry_resists_page_override",
+      "passed": true,
+      "evidence": {
+        "before": [
+          40,
+          180,
+          240,
+          180,
+          240,
+          220,
+          40,
+          220
+        ],
+        "after": [
+          40,
+          180,
+          240,
+          180,
+          240,
+          220,
+          40,
+          220
+        ],
+        "content_quads": [
+          [
+            40,
+            180,
+            240,
+            180,
+            240,
+            220,
+            40,
+            220
+          ]
+        ],
+        "rendered_pixels_unchanged": true
+      }
+    },
+    {
+      "name": "snapshot_geometry_matches_render",
+      "passed": true,
+      "evidence": {
+        "otp_bounds": [
+          40,
+          180,
+          200,
+          40
+        ]
+      }
+    },
+    {
+      "name": "native_hit_test_available",
+      "passed": true,
+      "evidence": {
+        "result": {
+          "backendNodeId": 13,
+          "frameId": "9D2259F1D2793B31C67A212483AA1B78",
+          "nodeId": 83
+        }
+      }
+    },
+    {
+      "name": "baseline_click",
+      "passed": true,
+      "evidence": {}
+    },
+    {
+      "name": "native_input_resists_hit_target_override",
+      "passed": true,
+      "evidence": {
+        "safe_clicked": "yes",
+        "decoy_clicked": null
+      }
+    }
+  ],
+  "scope": "synthetic data URL only; not production isolation or Pi performance"
+}

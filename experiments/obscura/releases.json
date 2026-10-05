@@ -1,0 +1,21 @@
+{
+  "version": "0.2.3",
+  "tag": "v0.2.3",
+  "commit": "1a3169da276d7720732c7b20535474942917fb83",
+  "license": "Apache-2.0",
+  "assets": {
+    "linux-arm64": {
+      "name": "obscura-aarch64-linux.tar.gz",
+      "sha256": "5ecf980bca3060236a7a86ec7ed83d943e6598ee87caa46d20325d90bc75f979"
+    },
+    "linux-amd64": {
+      "name": "obscura-x86_64-linux.tar.gz",
+      "sha256": "1534d1e6ddaf3d080ec4091eb41d0a4d8cc042a48b607d3c410fc13b482a9eec"
+    },
+    "windows-amd64": {
+      "name": "obscura-x86_64-windows.zip",
+      "sha256": "781a1b8bd12b65ec5aba95842e75e6f56b3101d360397506c0e35fe3f78536e8",
+      "binary_sha256": "d4352f1fae844769d1d49f10751929b6c33723a11e66f984b3f9310420cb6691"
+    }
+  }
+}

@@ -1,0 +1,23 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Synthetic browser safety gate (no real credentials)</title>
+<style>
+  body { margin: 0; background: white; }
+  button { position: absolute; border: 0; padding: 0; width: 160px; height: 60px; }
+  #safe { left: 40px; top: 40px; background: rgb(0,180,0); }
+  #decoy { left: 300px; top: 40px; background: rgb(220,0,0); }
+  #otp { position: absolute; left: 40px; top: 180px; width: 200px; height: 40px;
+         box-sizing: border-box; border: 0; background: rgb(200,0,200); }
+</style>
+<button id="safe" aria-expanded="true">Personal Information</button>
+<button id="decoy">Do not click</button>
+<input id="otp" autocomplete="one-time-code" value="SYNTHETIC-OTP-ONLY">
+<script>
+  window.__cb_page_marker = 'page-owned';
+  for (const name of ['safe', 'decoy']) {
+    document.getElementById(name).addEventListener('click', function () {
+      this.setAttribute('data-clicked', 'yes');
+      this.setAttribute('aria-expanded', 'false');
+    });
+  }
+</script>

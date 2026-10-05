@@ -6,4 +6,5 @@ deploy/browser-engine text eol=lf
 deploy/browser.sudoers text eol=lf
 *.py text eol=lf
 *.js text eol=lf
+experiments/obscura/fixture.html text eol=lf
 deploy/seccomp/* text eol=lf

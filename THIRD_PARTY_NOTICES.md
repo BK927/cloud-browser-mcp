@@ -21,6 +21,12 @@
 
 ## 다른 구성요소
 
+`experiments/obscura/`는 **Obscura v0.2.3의 도입 전 안전성 시험 자료**이며,
+기본 엔진이나 서비스에 Obscura를 포함하지 않습니다. 실행 파일도 저장소에 배포하지 않습니다.
+Obscura 자체는 [Apache-2.0](https://github.com/h4ckf0r0day/obscura/blob/v0.2.3/LICENSE)이며,
+V8·렌더링·글꼴 등 포함 구성요소에는 각각 원래 라이선스가 적용됩니다.
+공식 배포 파일을 별도 취득할 때 해당 고지를 유지하세요. 이 저장소의 자체 시험 코드·문서만 MIT입니다.
+
 `deploy/seccomp/docker-29.8.0.json`은 Docker 29.8.0에 포함된 Moby profiles/seccomp v0.2.3의 원본 정책이며,
 `chromium.json`은 Chromium에 필요한 정확한 namespace 호출 6개를 추가한 수정본입니다.
 두 파일에는 **Apache-2.0**이 적용됩니다. 원본 `LICENSE`·`NOTICE`와 변경 내역을
